@@ -1,0 +1,34 @@
+{
+  "name": "dmarcscope",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:migrate": "node scripts/migrate.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "vitest run tests/e2e"
+  },
+  "dependencies": {
+    "jose": "^6.2.17",
+    "next": "^16.4.6",
+    "openid-client": "^6.9.0",
+    "pg": "^8.23.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=20.9"
+  },
+  "license": "Apache-2.0",
+  "description": "Self-hosted DMARC aggregate report monitoring: ingest, dashboards, SPF/DKIM diagnosis."
+}

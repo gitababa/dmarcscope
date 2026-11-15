@@ -1,0 +1,63 @@
+# Everything on one machine: PostgreSQL, migrations, the dashboard, and the
+# ingest job. Configure via a .env file next to this one (see .env.example);
+# DATABASE_URL is set here and does not need to be in it.
+#
+#   docker compose up -d                 # database, migrations, dashboard on :3000
+#   docker compose run --rm ingest       # one ingest run (schedule this, e.g. from cron)
+#   docker compose run --rm ingest import /reports     # load files from ./demo-reports
+
+x-database-url: &database-url postgresql://dmarcscope:${POSTGRES_PASSWORD:-dmarcscope}@db:5432/dmarcscope
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dmarcscope
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dmarcscope}
+      POSTGRES_DB: dmarcscope
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dmarcscope -d dmarcscope']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: .
+    command: ['node', 'scripts/migrate.mjs']
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: *database-url
+    ports:
+      - '${PORT:-3000}:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    profiles: ['jobs']
+    env_file: .env
+    environment:
+      DATABASE_URL: *database-url
+    volumes:
+      - ./demo-reports:/reports:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

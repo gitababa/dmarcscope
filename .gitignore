@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# next.js
+.next/
+out/
+build/
+dist/
+next-env.d.ts
+*.tsbuildinfo
+
+# local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# platform / tooling state
+.vercel/
+.claude/
+
+# local data
+demo-reports/
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/
+*.log

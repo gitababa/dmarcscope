@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/ingest",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/dns-check",
+      "schedule": "30 6 * * *"
+    }
+  ],
+  "functions": {
+    "api/cron/ingest.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{app/**,lib/**,components/**,scripts/**,tests/**,docs/**,db/**,public/**,node_modules/**,.next/**,*.md}"
+    }
+  }
+}

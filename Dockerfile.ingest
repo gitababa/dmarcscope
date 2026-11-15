@@ -1,0 +1,19 @@
+# Ingest worker image: a one-shot job. Run it on a schedule (cron, Kubernetes
+# CronJob, Cloud Run Job + Cloud Scheduler, ECS scheduled task, ...).
+#
+#   docker build -f Dockerfile.ingest -t dmarcscope-ingest .
+#   docker run --rm --env-file .env dmarcscope-ingest            # = python -m ingestor run
+
+FROM python:3.13-slim
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY ingestor ./ingestor
+RUN useradd --system --uid 10001 --no-create-home ingest
+USER ingest
+ENTRYPOINT ["python", "-m", "ingestor"]
+CMD ["run"]

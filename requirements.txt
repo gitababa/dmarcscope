@@ -1,0 +1,3 @@
+# Ingest worker (python -m ingestor). Python 3.11+.
+parsedmarc==11.3.0
+psycopg[binary]==3.3.9
