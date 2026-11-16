@@ -106,7 +106,9 @@ def main() -> int:
                         records.append(record_xml(domain, policy, ip, count, dkim_ok, spf_ok, dkim_auth, spf_auth))
                 if not records:
                     continue
-                report_id = f"{begin:%Y%m%d}-{zlib.crc32(f"{org}|{domain}".encode())}-{back}"
+                # (Kept free of nested same-quote f-strings, which need Python 3.12.)
+                checksum = zlib.crc32((org + "|" + domain).encode())
+                report_id = f"{begin:%Y%m%d}-{checksum}-{back}"
                 xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <feedback>
   <report_metadata>

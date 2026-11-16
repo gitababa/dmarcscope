@@ -43,7 +43,11 @@ export async function runAndStoreDnsCheck(domain: string, opts: { force?: boolea
   if (rows[0].recent && !opts.force) return { status: 'cooldown' }
   const domainId = rows[0].id
 
-  const signers = await getObservedDkimSigners(domain)
+  // Selector and signing domain are copied from reports, i.e. chosen by
+  // whoever sent the report: only well-formed names become DNS queries.
+  const signers = (await getObservedDkimSigners(domain)).filter(
+    (s) => isValidDomainName(s.signing_domain) && /^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$/i.test(s.selector)
+  )
   const [results, spfExpanded] = await Promise.all([
     runDnsChecks(domain, signers),
     // SPF expansion powers source attribution on the Issues page: which

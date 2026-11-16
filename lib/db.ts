@@ -26,12 +26,26 @@ export function getPool(): Pool {
   if (!url) {
     throw new Error('DATABASE_URL is not set. Point it at a PostgreSQL database (see .env.example).')
   }
-  const max = Number.parseInt(process.env.DATABASE_POOL_MAX || '', 10)
+  const intEnv = (name: string, fallback: number): number => {
+    const n = Number.parseInt(process.env[name] || '', 10)
+    return Number.isInteger(n) && n >= 0 ? n : fallback
+  }
+  const serverTimeout = intEnv('DATABASE_STATEMENT_TIMEOUT_MS', 0)
   pool = new Pool({
     connectionString: url,
-    max: Number.isInteger(max) && max > 0 ? max : 5,
+    // A page runs up to five queries side by side.
+    max: intEnv('DATABASE_POOL_MAX', 10) || 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
+    // Give up on a query after this long and drop its connection, so one slow
+    // aggregate cannot hold every pool slot (0 disables). This is enforced on
+    // the client and works through any pooler.
+    query_timeout: intEnv('DATABASE_QUERY_TIMEOUT_MS', 30_000) || undefined,
+    // Optional server-side limit, sent as a connection parameter. Off by
+    // default because transaction-mode poolers (PgBouncer) reject unknown
+    // startup parameters; there, set it on the role instead:
+    //   ALTER ROLE <user> SET statement_timeout = '30s'
+    ...(serverTimeout > 0 ? { statement_timeout: serverTimeout } : {}),
     types: {
       getTypeParser: ((oid: number, format?: string) => {
         if ((oid === TIMESTAMPTZ || oid === TIMESTAMP) && format !== 'binary') return isoParser

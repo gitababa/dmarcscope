@@ -30,20 +30,24 @@ export function diagnoseSource(s: ProblemSource, spf: SpfExpansion | undefined):
   // --- SPF authorization: is the sending IP in the domain's SPF at all? ---
   let authorized: boolean | null = null // null = unknown (no expansion available)
   if (spf) {
-    if (!spf.has_spf) {
+    const match = spf.has_spf ? matchIpInNetworks(s.source_ip, Array.isArray(spf.networks) ? spf.networks : []) : null
+    if (match) {
+      authorized = true
+      details.push(
+        `This IP is authorized by ${s.domain}'s SPF (${match.via === 'top-level' ? `directly, ${match.cidr}` : `via ${match.via}, ${match.cidr}`}).`
+      )
+    } else if (spf.incomplete) {
+      // Part of the record could not be resolved at the last check, so a
+      // miss proves nothing. Leave `authorized` unknown rather than accuse.
+      details.push(
+        `${s.domain}'s SPF record could not be fully resolved at the last DNS check, so whether this IP is authorized is unknown. Run the DNS checks again.`
+      )
+    } else if (!spf.has_spf) {
       details.push(`${s.domain} publishes no SPF record — no sender can pass SPF for it.`)
       authorized = false
     } else {
-      const match = matchIpInNetworks(s.source_ip, spf.networks)
-      if (match) {
-        authorized = true
-        details.push(
-          `This IP is authorized by ${s.domain}'s SPF (${match.via === 'top-level' ? `directly, ${match.cidr}` : `via ${match.via}, ${match.cidr}`}).`
-        )
-      } else {
-        authorized = false
-        details.push(`This IP is not covered by ${s.domain}'s SPF record.`)
-      }
+      authorized = false
+      details.push(`This IP is not covered by ${s.domain}'s SPF record.`)
     }
   }
 

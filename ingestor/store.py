@@ -231,7 +231,7 @@ def start_run(conn: psycopg.Connection, stale_after_seconds: int) -> int | None:
     return row[0] if row else None
 
 
-def finish_run(conn: psycopg.Connection, run_id: int, stats: dict) -> None:
+def finish_run(conn: psycopg.Connection, run_id: int, stats: dict, failed: bool = False) -> None:
     # Keep the stored error list small; full detail goes to the logs.
     errors = [
         {k: str(v)[:500] for k, v in e.items()} if isinstance(e, dict) else {"error": str(e)[:500]}
@@ -241,7 +241,8 @@ def finish_run(conn: psycopg.Connection, run_id: int, stats: dict) -> None:
         cur.execute(
             """
             UPDATE ingest_runs
-            SET finished_at = NOW(), messages_fetched = %s, reports_parsed = %s, reports_skipped = %s, errors = %s
+            SET finished_at = NOW(), messages_fetched = %s, reports_parsed = %s, reports_skipped = %s,
+                errors = %s, failed = %s
             WHERE id = %s
             """,
             (
@@ -249,6 +250,7 @@ def finish_run(conn: psycopg.Connection, run_id: int, stats: dict) -> None:
                 stats.get("stored", 0),
                 stats.get("skipped", 0) + stats.get("invalid", 0),
                 json.dumps(errors) if errors else None,
+                failed,
                 run_id,
             ),
         )

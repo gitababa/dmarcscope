@@ -5,6 +5,7 @@ import {
   getTopSources,
   getRecentIngestRuns,
   getDataExtent,
+  getIngestHealth,
   getVolumeTimeseries,
 } from '@/lib/queries'
 import { identifySource } from '@/lib/senders'
@@ -23,11 +24,11 @@ export default async function OverviewPage({
   const { range: rawRange } = await searchParams
   const days = parseRange(rawRange)
 
-  const [domains, sources, runs, extent, timeseries] = await Promise.all([
+  const [domains, sources, runs, health, timeseries] = await Promise.all([
     getDomainSummaries(days),
     getTopSources(days, 10),
     getRecentIngestRuns(5),
-    getDataExtent(),
+    getIngestHealth(),
     getVolumeTimeseries(days),
   ])
 
@@ -46,6 +47,20 @@ export default async function OverviewPage({
   const rate = (n: number) => (hasData ? n / totals.messages : NaN)
   const range = rangeParam(days)
   const lastRun = runs[0]
+  // The whole-table extent is only needed to explain an empty window.
+  const extent = !hasData && days !== 0 && domains.length > 0 ? await getDataExtent() : null
+  const staleNotice = health.status === 'stale' && (
+    <div className="notice warn" role="status">
+      <span>
+        <strong>Reports are not being ingested.</strong>{' '}
+        {health.last_success_at
+          ? `The last ingest run that completed was ${relTime(health.last_success_at)}`
+          : 'No ingest run has completed yet'}
+        {health.last_run_failed ? ', and the most recent run failed' : ''}. What you see below may be out of date —
+        check the ingest job&apos;s schedule and logs.
+      </span>
+    </div>
+  )
 
   // Nothing ingested at all yet: show setup guidance instead of empty tables.
   if (domains.length === 0) {
@@ -57,6 +72,7 @@ export default async function OverviewPage({
             <p>No DMARC reports have been ingested yet.</p>
           </div>
         </div>
+        {staleNotice}
         <Onboarding hasRun={runs.length > 0} />
         {runs.length > 0 && <IngestRuns runs={runs} />}
       </>
@@ -76,7 +92,9 @@ export default async function OverviewPage({
         <RangeSwitcher basePath="/" active={days} />
       </div>
 
-      {!hasData && extent.total_messages > 0 && days !== 0 && (
+      {staleNotice}
+
+      {extent && extent.total_messages > 0 && (
         <div className="notice warn">
           <span>
             No reports fall inside this window, but {fmtInt(extent.total_messages)} messages are on record from{' '}
@@ -252,7 +270,11 @@ function IngestRuns({ runs }: { runs: Awaited<ReturnType<typeof getRecentIngestR
                     <td className="num">{fmtInt(r.reports_parsed)}</td>
                     <td className="num muted">{fmtInt(r.reports_skipped)}</td>
                     <td>
-                      {r.stalled ? (
+                      {r.failed ? (
+                        <Pill tone="bad" title="The mailbox or the database could not be reached; see the ingest job's logs">
+                          failed
+                        </Pill>
+                      ) : r.stalled ? (
                         <Pill tone="bad" title="Started over an hour ago and never finished">
                           did not finish
                         </Pill>

@@ -11,7 +11,7 @@ import type { Identity } from './types'
 export class LoginError extends Error {
   // `code` is a stable identifier shown to the user via /login?error=<code>.
   constructor(
-    public code: 'unverified_email' | 'no_email' | 'failed' | 'expired',
+    public code: 'unverified_email' | 'no_email' | 'wrong_account' | 'failed' | 'expired',
     message: string
   ) {
     super(message)
@@ -68,6 +68,7 @@ export async function beginLogin(
   returnTo: string,
   env: Env = process.env
 ): Promise<{ url: string; state: LoginState }> {
+  parseRequiredClaims(env.OIDC_REQUIRED_CLAIMS) // surface a malformed value before the round trip
   const config = await getConfiguration(env)
   const codeVerifier = oidc.randomPKCECodeVerifier()
   const state = oidc.randomState()
@@ -137,18 +138,58 @@ export async function completeLogin(
     }
   }
 
-  let email = asString(claims[emailClaim])
-  // Entra ID commonly omits `email` and carries the sign-in name instead.
-  if (!looksLikeEmail(email) && emailClaim === 'email') {
-    email = [asString(claims.preferred_username), asString(claims.upn)].find(looksLikeEmail)
+  return identityFromClaims(claims, env)
+}
+
+// OIDC_REQUIRED_CLAIMS="hd=example.com,tid=1111|2222": every listed claim must
+// be present with one of the given values. This is what ties a sign-in to an
+// organization when the provider is shared (Google's `hd`, Entra's `tid`).
+export function parseRequiredClaims(raw: string | undefined): Array<{ claim: string; values: string[] }> {
+  const out: Array<{ claim: string; values: string[] }> = []
+  for (const part of (raw || '').split(',')) {
+    if (!part.trim()) continue
+    const eq = part.indexOf('=')
+    const claim = eq === -1 ? '' : part.slice(0, eq).trim()
+    const values = eq === -1 ? [] : part.slice(eq + 1).split('|').map((v) => v.trim()).filter(Boolean)
+    if (!claim || values.length === 0) {
+      throw new ConfigError('OIDC_REQUIRED_CLAIMS must look like "claim=value,other=value1|value2".')
+    }
+    out.push({ claim, values })
   }
-  if (!looksLikeEmail(email)) {
-    throw new LoginError('no_email', 'The identity provider did not return an email address')
-  }
-  if (claims.email_verified === false && !envBool(env.OIDC_ALLOW_UNVERIFIED_EMAIL)) {
-    throw new LoginError('unverified_email', 'The identity provider reports this email address as unverified')
+  return out
+}
+
+function claimMatches(actual: unknown, allowed: string[]): boolean {
+  const present = Array.isArray(actual) ? actual : [actual]
+  return present.some((v) => (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') && allowed.includes(String(v)))
+}
+
+// Turns validated token claims into an identity, or refuses the sign-in.
+export function identityFromClaims(claims: Record<string, unknown>, env: Env = process.env): Identity {
+  const sub = asString(claims.sub)
+  if (!sub) throw new LoginError('failed', 'ID token has no subject')
+
+  for (const { claim, values } of parseRequiredClaims(env.OIDC_REQUIRED_CLAIMS)) {
+    if (!claimMatches(claims[claim], values)) {
+      throw new LoginError('wrong_account', `Required claim "${claim}" is missing or has a value that is not allowed`)
+    }
   }
 
+  // The address comes from exactly one claim. To use a provider's sign-in
+  // name instead (Entra ID often issues no `email`), set OIDC_EMAIL_CLAIM
+  // explicitly, e.g. to preferred_username.
+  const emailClaim = env.OIDC_EMAIL_CLAIM?.trim() || 'email'
+  const email = asString(claims[emailClaim])
+  if (!looksLikeEmail(email)) {
+    throw new LoginError('no_email', `The identity provider did not return an email address in the "${emailClaim}" claim`)
+  }
+  // `email_verified` describes the standard `email` claim only. Anything
+  // other than an explicit true counts as unverified.
+  if (emailClaim === 'email' && claims.email_verified !== true && !envBool(env.OIDC_ALLOW_UNVERIFIED_EMAIL)) {
+    throw new LoginError('unverified_email', 'The identity provider did not confirm this email address as verified')
+  }
+
+  const groupsClaim = env.OIDC_GROUPS_CLAIM?.trim() || 'groups'
   return {
     sub,
     email: email.toLowerCase(),

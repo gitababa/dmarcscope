@@ -9,7 +9,10 @@
 // The default is deny: being able to sign in at the identity provider does not
 // by itself grant access. (A "Sign in with Google" client, for example, will
 // happily authenticate any Google account.) Roles are recomputed on every
-// request, so removing someone from a list takes effect immediately.
+// request from these lists, so a list change applies as soon as the app runs
+// with the new configuration. What the identity provider said at sign-in
+// (email, groups) is a different matter: with AUTH_PROVIDER=oidc it is fixed
+// in the session cookie until that expires — see SESSION_NOT_BEFORE.
 
 import { envBool, envList, type Env } from '../config'
 import type { Identity, Role } from './types'

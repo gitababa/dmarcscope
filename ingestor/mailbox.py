@@ -24,8 +24,13 @@ TIMEOUT_SECONDS = 60
 
 # handle(raw_message) -> "done" (mark seen, optionally move to processed) or
 # "invalid" (mark seen, move to the invalid folder). Raising leaves the
-# message unseen so the next run retries it.
+# message unseen so the next run retries it; raising AbortRun also stops the
+# run, for failures that every following message would hit too.
 Handler = Callable[[bytes], str]
+
+
+class AbortRun(Exception):
+    """Raised by a handler when carrying on is pointless (database gone)."""
 
 
 def imap_date(d: dt.date) -> str:
@@ -130,8 +135,8 @@ def drain(settings: Settings, handle: Handler, stats: dict, deadline: float) -> 
                         stats["errors"].append({"uid": uid_text, "error": "fetch failed"})
                         continue
                     outcome = handle(raw)
-                except (imaplib.IMAP4.abort, OSError):
-                    raise  # connection is gone; abort the run
+                except (imaplib.IMAP4.abort, OSError, AbortRun):
+                    raise  # a connection is gone; abort the run
                 except Exception as e:  # noqa: BLE001 - one bad message must not stop the run
                     log.exception("message uid=%s failed; left unseen for retry", uid_text)
                     stats["errors"].append({"uid": uid_text, "error": f"{type(e).__name__}: {e}"})

@@ -6,6 +6,8 @@ import logging
 import time
 from pathlib import Path
 
+import psycopg
+
 from . import enrich, mailbox, store
 from .config import Settings
 from .parsing import InvalidDMARCReport, ParserError, parse_email, parse_file
@@ -16,16 +18,46 @@ REPORT_SUFFIXES = {".xml", ".gz", ".zip", ".eml", ".msg"}
 
 
 def _new_stats() -> dict:
+    """The counters every command reports. This is the JSON printed on stdout
+    (docs/configuration.md); keep the two in step."""
     return {
         "fetched": 0,  # messages / files looked at
         "stored": 0,  # new aggregate reports written
         "skipped": 0,  # duplicates, filtered-out domains, non-aggregate reports
         "invalid": 0,  # not a DMARC report at all
-        "enriched": 0,
-        "purged": 0,
-        "drained": False,
-        "errors": [],
+        "enriched": 0,  # IPs given a reverse-DNS name
+        "purged": 0,  # reports deleted by retention
+        "drained": False,  # run only: the mailbox was emptied
+        "already_running": False,  # run only: another run held the slot; nothing was done
+        "errors": [],  # one entry per message / file that could not be processed
     }
+
+
+def _connection_lost(conn) -> bool:
+    """The database connection itself is unusable: no later statement can
+    work. (Judged from the connection, not the exception class — a deadlock or
+    a cancelled statement is also an OperationalError, and is retryable.)"""
+    return bool(conn.closed or conn.broken)
+
+
+def _record_finish(conn, settings: Settings, run_id: int, stats: dict, failed: bool) -> None:
+    """Close the run row, whatever state the connection was left in. Never
+    raises: this runs while another exception may be on its way out, and that
+    one is the error worth reporting."""
+    try:
+        conn.rollback()  # clear an aborted transaction, if any
+        store.finish_run(conn, run_id, stats, failed)
+        return
+    except Exception:  # noqa: BLE001
+        log.warning("could not record the end of run %s on the open connection; retrying on a new one", run_id)
+    try:
+        fresh = store.connect(settings)
+        try:
+            store.finish_run(fresh, run_id, stats, failed)
+        finally:
+            fresh.close()
+    except Exception:  # noqa: BLE001
+        log.exception("could not record the end of run %s; it will show as unfinished", run_id)
 
 
 def _store_parsed(conn, parsed: dict, settings: Settings, stats: dict) -> None:
@@ -40,7 +72,10 @@ def _store_parsed(conn, parsed: dict, settings: Settings, stats: dict) -> None:
         outcome = store.insert_aggregate_report(conn, report, settings)
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except psycopg.Error:
+            pass  # connection gone; the original error is the one to report
         raise
     if outcome == store.STORED:
         stats["stored"] += 1
@@ -54,6 +89,12 @@ def run_ingest(settings: Settings) -> dict:
     stats = _new_stats()
     start = time.monotonic()
 
+    if settings.allowed_domains is None:
+        log.warning(
+            "ALLOWED_DOMAINS is not set: a report about ANY domain that reaches the mailbox will be stored and "
+            "shown, and anyone can email one. Set ALLOWED_DOMAINS to the domains you monitor."
+        )
+
     conn = store.connect(settings)
     try:
         stale_after = max(900, 2 * (settings.mail_budget_seconds + settings.enrich_budget_seconds))
@@ -63,6 +104,7 @@ def run_ingest(settings: Settings) -> dict:
             stats["already_running"] = True
             return stats
 
+        failed = True  # until the mailbox phase completes
         try:
             stats["purged"] = store.apply_retention(conn, settings)
 
@@ -73,27 +115,34 @@ def run_ingest(settings: Settings) -> dict:
                     stats["invalid"] += 1
                     stats["errors"].append({"error": f"not a valid DMARC report: {e}"})
                     return "invalid"
-                _store_parsed(conn, parsed, settings, stats)
+                try:
+                    _store_parsed(conn, parsed, settings, stats)
+                except Exception as e:
+                    if _connection_lost(conn):
+                        # Every later message would fail the same way; stop
+                        # instead of downloading the rest of the mailbox for nothing.
+                        raise mailbox.AbortRun(f"database connection lost: {type(e).__name__}: {e}") from e
+                    raise
                 return "done"
 
-            try:
-                mailbox.drain(settings, handle, stats, deadline=start + settings.mail_budget_seconds)
-            except Exception as e:  # noqa: BLE001 - record the failure on the run, then re-raise
-                conn.rollback()
-                stats["errors"].append({"error": f"mailbox: {type(e).__name__}: {e}"})
-                stats["fatal"] = True
-                raise
+            mailbox.drain(settings, handle, stats, deadline=start + settings.mail_budget_seconds)
+            failed = False
 
             try:
                 stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds)
             except Exception as e:  # noqa: BLE001 - enrichment is best-effort
-                conn.rollback()
                 log.exception("reverse-DNS enrichment failed")
                 stats["errors"].append({"error": f"enrichment: {type(e).__name__}: {e}"})
+        except Exception as e:  # noqa: BLE001 - record the failure on the run, then re-raise
+            stats["errors"].append({"error": f"fatal: {type(e).__name__}: {e}"})
+            raise
         finally:
-            store.finish_run(conn, run_id, stats)
+            _record_finish(conn, settings, run_id, stats, failed)
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     log.info(
         "ingest finished: fetched=%(fetched)s stored=%(stored)s skipped=%(skipped)s invalid=%(invalid)s "
@@ -135,8 +184,12 @@ def import_files(settings: Settings, paths: list[str]) -> dict:
             try:
                 _store_parsed(conn, parsed, settings, stats)
             except Exception as e:  # noqa: BLE001
+                if _connection_lost(conn):
+                    raise  # fatal: nothing further can be stored
                 log.exception("could not store %s", path)
                 stats["errors"].append({"file": str(path), "error": f"{type(e).__name__}: {e}"})
+        if stats["fetched"] == 0:
+            stats["errors"].append({"error": "no report files found in the given path(s)"})
         stats["purged"] = store.apply_retention(conn, settings)
     finally:
         conn.close()
@@ -145,8 +198,10 @@ def import_files(settings: Settings, paths: list[str]) -> dict:
 
 
 def run_enrich(settings: Settings) -> dict:
+    stats = _new_stats()
     conn = store.connect(settings)
     try:
-        return {"enriched": enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds or 60)}
+        stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds or 60)
     finally:
         conn.close()
+    return stats

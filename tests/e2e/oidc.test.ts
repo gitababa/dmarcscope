@@ -187,7 +187,7 @@ describe.skipIf(!BASE)('OIDC sign-in, end to end', () => {
 
   it('grants viewers access through a group claim, without admin controls', async () => {
     const b = new Browser()
-    const { url, text } = await b.signIn({ sub: 'u-viewer', email: 'viewer@example.com', groups: ['staff', 'dmarc-viewers'] })
+    const { url, text } = await b.signIn({ sub: 'u-viewer', email: 'viewer@example.com', email_verified: true, groups: ['staff', 'dmarc-viewers'] })
     expect(url.pathname).toBe('/')
     expect(text).toContain('viewer@example.com')
     expect(text).not.toContain('>admin<')
@@ -207,6 +207,9 @@ describe.skipIf(!BASE)('OIDC sign-in, end to end', () => {
   it('rejects unverified email addresses and identities without an email', async () => {
     const unverified = await new Browser().signIn({ sub: 'u1', email: 'admin@example.com', email_verified: false })
     expect(unverified.url.pathname + unverified.url.search).toBe('/login?error=unverified_email')
+    // a provider that says nothing about verification is treated the same way
+    const silent = await new Browser().signIn({ sub: 'u3', email: 'admin@example.com' })
+    expect(silent.url.pathname + silent.url.search).toBe('/login?error=unverified_email')
     const noEmail = await new Browser().signIn({ sub: 'u2' })
     expect(noEmail.url.pathname + noEmail.url.search).toBe('/login?error=no_email')
   })
@@ -246,7 +249,7 @@ describe.skipIf(!BASE)('OIDC sign-in, end to end', () => {
 
   it('does not follow an off-site returnTo', async () => {
     const b = new Browser()
-    const { url } = await b.signIn({ sub: 'u-admin', email: 'admin@example.com' }, 'https://evil.example/')
+    const { url } = await b.signIn({ sub: 'u-admin', email: 'admin@example.com', email_verified: true }, 'https://evil.example/')
     expect(url.origin).toBe(new URL(BASE!).origin)
     expect(url.pathname).toBe('/')
   })
@@ -276,6 +279,17 @@ describe.skipIf(!BASE)('OIDC sign-in, end to end', () => {
         headers: { authorization: `Bearer ${process.env.E2E_CRON_SECRET}` },
       })
       expect(ok.status).toBe(404)
+    }
+
+    // ingest health: closed without the token, and never a 200 without a recent run
+    expect((await fetch(`${BASE}/api/cron/status`)).status).toBe(401)
+    expect((await fetch(`${BASE}/api/cron/status`, { headers: { authorization: 'Bearer wrong' } })).status).toBe(401)
+    if (process.env.E2E_CRON_SECRET) {
+      const res = await fetch(`${BASE}/api/cron/status`, { headers: { authorization: `Bearer ${process.env.E2E_CRON_SECRET}` } })
+      const body = await res.json()
+      expect(['ok', 'stale', 'never']).toContain(body.status)
+      expect(res.status).toBe(body.status === 'ok' ? 200 : 503)
+      expect(body.ok).toBe(body.status === 'ok')
     }
   })
 })

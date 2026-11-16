@@ -38,6 +38,8 @@ export type RecentRun = {
   reports_parsed: number
   reports_skipped: number
   had_errors: boolean
+  // ended on a fatal error (mailbox or database unreachable)
+  failed: boolean
   // started more than an hour ago and never finished (crashed or was killed)
   stalled: boolean
 }
@@ -160,24 +162,63 @@ export async function getRecentIngestRuns(limit = 5): Promise<RecentRun[]> {
   const rows = (await sql`
     SELECT id::int AS id, started_at, finished_at, messages_fetched, reports_parsed, reports_skipped,
            (errors IS NOT NULL AND jsonb_typeof(errors) = 'array' AND jsonb_array_length(errors) > 0) AS had_errors,
+           failed,
            (finished_at IS NULL AND started_at < NOW() - INTERVAL '1 hour') AS stalled
     FROM ingest_runs
     ORDER BY started_at DESC
     LIMIT ${limit}
-  `) as Array<{
-    id: number
-    started_at: string
-    finished_at: string | null
-    messages_fetched: number
-    reports_parsed: number
-    reports_skipped: number
-    had_errors: boolean
-    stalled: boolean
-  }>
+  `) as RecentRun[]
 
   return rows
 }
 
+export type IngestHealth = {
+  // 'never'  no run has been recorded at all (fresh install)
+  // 'ok'     a run completed inside the window
+  // 'stale'  runs exist, but none completed inside the window
+  status: 'never' | 'ok' | 'stale'
+  stale_after_hours: number
+  last_success_at: string | null
+  last_run_started_at: string | null
+  last_run_failed: boolean
+}
+
+// INGEST_STALE_HOURS: how long the dashboard may go without a completed
+// ingest run before it says so. The default suits a daily schedule.
+export function ingestStaleHours(env: Record<string, string | undefined> = process.env): number {
+  const n = Number.parseInt(env.INGEST_STALE_HOURS || '', 10)
+  return Number.isInteger(n) && n >= 1 ? Math.min(n, 24 * 90) : 36
+}
+
+export async function getIngestHealth(): Promise<IngestHealth> {
+  const hours = ingestStaleHours()
+  const rows = (await sql`
+    SELECT
+      (SELECT MAX(finished_at) FROM ingest_runs WHERE finished_at IS NOT NULL AND NOT failed) AS last_success_at,
+      (SELECT started_at FROM ingest_runs ORDER BY started_at DESC LIMIT 1) AS last_run_started_at,
+      COALESCE((SELECT failed FROM ingest_runs ORDER BY started_at DESC LIMIT 1), FALSE) AS last_run_failed,
+      COALESCE(
+        (SELECT MAX(finished_at) FROM ingest_runs WHERE finished_at IS NOT NULL AND NOT failed)
+          > NOW() - make_interval(hours => ${hours}::int),
+        FALSE
+      ) AS fresh
+  `) as Array<{
+    last_success_at: string | null
+    last_run_started_at: string | null
+    last_run_failed: boolean
+    fresh: boolean
+  }>
+  const r = rows[0]
+  return {
+    status: r.last_run_started_at == null ? 'never' : r.fresh ? 'ok' : 'stale',
+    stale_after_hours: hours,
+    last_success_at: r.last_success_at,
+    last_run_started_at: r.last_run_started_at,
+    last_run_failed: r.last_run_failed,
+  }
+}
+
+// Scans the whole records table: call it only when its answer will be shown.
 export async function getDataExtent(): Promise<DataExtent> {
   const rows = (await sql`
     SELECT
@@ -358,9 +399,11 @@ export async function getObservedDkimSigners(domain: string): Promise<DkimSigner
       AND elem->>'domain' IS NOT NULL
       AND r.period_end >= NOW() - INTERVAL '30 days'
       AND (
-        LOWER(elem->>'domain') = LOWER(${domain})
-        OR LOWER(elem->>'domain') LIKE '%.' || LOWER(${domain})
-        OR LOWER(${domain}) LIKE '%.' || LOWER(elem->>'domain')
+        -- Suffix comparisons, not LIKE: the signing domain comes from the
+        -- report (untrusted) and "%" or "_" in it would act as wildcards.
+        LOWER(elem->>'domain') = LOWER(${domain}::text)
+        OR RIGHT(LOWER(elem->>'domain'), LENGTH(${domain}::text) + 1) = '.' || LOWER(${domain}::text)
+        OR RIGHT(LOWER(${domain}::text), LENGTH(elem->>'domain') + 1) = '.' || LOWER(elem->>'domain')
       )
     GROUP BY 1, 2
     ORDER BY last_seen DESC
@@ -431,24 +474,13 @@ export async function getProblemSources(days = 7, limit = 50, domain?: string): 
       SUM(CASE WHEN r.dkim_aligned THEN r.message_count ELSE 0 END)::bigint AS dkim_passed,
       SUM(CASE WHEN r.spf_aligned THEN r.message_count ELSE 0 END)::bigint AS spf_passed,
       MAX(r.period_end) AS last_seen,
-      SUM(CASE WHEN NOT r.dmarc_aligned AND diag.dkim_sig_valid THEN r.message_count ELSE 0 END)::bigint AS fail_with_valid_dkim_sig,
-      SUM(CASE WHEN NOT r.dmarc_aligned AND diag.spf_raw_pass THEN r.message_count ELSE 0 END)::bigint AS fail_with_raw_spf_pass,
-      SUM(CASE WHEN NOT r.dmarc_aligned AND diag.dkim_sig_valid AND diag.spf_raw_pass THEN r.message_count ELSE 0 END)::bigint AS fail_with_both,
+      SUM(CASE WHEN NOT r.dmarc_aligned AND r.dkim_sig_valid THEN r.message_count ELSE 0 END)::bigint AS fail_with_valid_dkim_sig,
+      SUM(CASE WHEN NOT r.dmarc_aligned AND r.spf_raw_pass THEN r.message_count ELSE 0 END)::bigint AS fail_with_raw_spf_pass,
+      SUM(CASE WHEN NOT r.dmarc_aligned AND r.dkim_sig_valid AND r.spf_raw_pass THEN r.message_count ELSE 0 END)::bigint AS fail_with_both,
       mode() WITHIN GROUP (ORDER BY r.envelope_from) FILTER (WHERE NOT r.dmarc_aligned AND r.envelope_from IS NOT NULL) AS top_fail_envelope
     FROM records r
     JOIN domains d ON d.id = r.domain_id
     LEFT JOIN ip_metadata m ON m.ip = r.source_ip
-    CROSS JOIN LATERAL (
-      SELECT
-        EXISTS (
-          SELECT 1 FROM jsonb_array_elements(COALESCE(r.dkim_results, '[]'::jsonb)) e
-          WHERE e->>'result' = 'pass'
-        ) AS dkim_sig_valid,
-        EXISTS (
-          SELECT 1 FROM jsonb_array_elements(COALESCE(r.spf_results, '[]'::jsonb)) e
-          WHERE e->>'result' = 'pass'
-        ) AS spf_raw_pass
-    ) diag
     WHERE r.period_end >= ${since}::timestamptz
       AND (${onlyDomain}::text IS NULL OR d.name = ${onlyDomain}::text)
     GROUP BY r.source_ip, d.name, m.reverse_dns, m.base_domain, m.provider_name, m.as_name, m.as_domain

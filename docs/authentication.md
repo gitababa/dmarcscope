@@ -18,13 +18,38 @@ a person must match at least one rule. All values are comma-separated and case-i
 | `ALLOWED_GROUPS` | **viewer** for members of these groups (group claim or groups header) |
 | `AUTH_ALLOW_ANY_AUTHENTICATED=true` | **viewer** for anyone the provider authenticates |
 
-Roles are evaluated on every request, so removing someone takes effect immediately, without
-waiting for their session to expire. Someone who is authenticated but matches no rule sees an
-"Access not granted" page showing the address they signed in with.
+Someone who is authenticated but matches no rule sees an "Access not granted" page showing the
+address they signed in with.
 
 Use `AUTH_ALLOW_ANY_AUTHENTICATED` only when the provider itself is limited to your
 organization (a single-tenant IdP, or an access proxy with its own policy). A public
 "Sign in with Google" client authenticates any Google account.
+
+### How strong is each rule?
+
+A rule is only as trustworthy as the email address or group name the provider hands over.
+
+| Setup | What the rule really checks |
+|---|---|
+| `proxy-jwt` (IAP, Cloudflare Access) | An address the proxy authenticated, re-verified on every request. Strongest. |
+| `oidc`, provider limited to your organization (single-tenant Entra / Okta / Keycloak) | An address your own directory issued. |
+| `oidc`, shared provider (Google), `ALLOWED_EMAILS` | Those exact accounts. |
+| `oidc`, shared provider (Google), `ALLOWED_EMAIL_DOMAINS` only | **Any** Google account with an address at that domain — including personal Google accounts registered with a work address, and accounts of people who have left. Add `OIDC_REQUIRED_CLAIMS=hd=<your domain>` so only accounts managed by your Workspace are accepted. |
+| `proxy-header` | Whatever the proxy puts in the header. Make sure it overwrites both the email and the groups header on every request. |
+
+### Removing someone's access
+
+How quickly a removal takes effect depends on where you remove them:
+
+| You change | Takes effect |
+|---|---|
+| An access list (`ALLOWED_*`, `ADMIN_*`) | When the app restarts with the new value — the lists are environment variables, checked on every request. |
+| The person's account or groups at the provider, with `proxy-jwt` / `proxy-header` | On their next request (as fast as the proxy enforces it). |
+| The person's account or groups at the provider, with `oidc` | When their session expires: the identity and groups are fixed at sign-in for `SESSION_MAX_AGE_HOURS` (default 12, maximum 168). |
+
+To cut `oidc` sessions short, set `SESSION_NOT_BEFORE` to the current time (ISO format, e.g.
+`2026-01-31T09:00:00Z`) and restart: every session issued before that moment is rejected and
+those users have to sign in again. Changing `SESSION_SECRET` has the same effect.
 
 ## `AUTH_PROVIDER=oidc` — built-in sign-in
 
@@ -45,17 +70,28 @@ Register `https://dmarc.example.com/auth/callback` as the redirect URI with the 
 
 | Provider | `OIDC_ISSUER` | Notes |
 |---|---|---|
-| Google | `https://accounts.google.com` | Set `ALLOWED_EMAIL_DOMAINS` or `ALLOWED_EMAILS`. Google does not issue a groups claim. |
-| Microsoft Entra ID | `https://login.microsoftonline.com/<tenant-id>/v2.0` | Use a single-tenant app registration. The `groups` claim (if enabled) contains group object IDs — put those IDs in `ADMIN_GROUPS` / `ALLOWED_GROUPS`. If no `email` claim is issued, the sign-in name (`preferred_username`) is used. |
+| Google | `https://accounts.google.com` | Set `ALLOWED_EMAILS`, or `ALLOWED_EMAIL_DOMAINS` together with `OIDC_REQUIRED_CLAIMS=hd=<your Workspace domain>`. Google does not issue a groups claim. |
+| Microsoft Entra ID | `https://login.microsoftonline.com/<tenant-id>/v2.0` | Use a single-tenant app registration. Entra does not issue `email_verified`, and its `email` claim is an editable directory attribute, so set `OIDC_EMAIL_CLAIM=preferred_username` to identify people by their sign-in name. The `groups` claim (if enabled) contains group object IDs — put those IDs in `ADMIN_GROUPS` / `ALLOWED_GROUPS`. |
 | Okta | `https://<org>.okta.com` or `https://<org>.okta.com/oauth2/default` | Add a `groups` claim to the ID token to use group rules. |
 | Keycloak | `https://<host>/realms/<realm>` | Add a group-membership mapper named `groups`. |
 | Auth0, Authentik, Zitadel, … | the issuer shown in the provider's OIDC settings | |
 
 Optional settings: `OIDC_PROVIDER_NAME` (button label), `OIDC_SCOPES`, `OIDC_GROUPS_CLAIM`,
-`OIDC_EMAIL_CLAIM`, `OIDC_PROMPT`, `SESSION_MAX_AGE_HOURS` (default 12) and
-`OIDC_LOGOUT_AT_IDP=true` to also end the provider session on sign-out.
+`OIDC_EMAIL_CLAIM`, `OIDC_PROMPT`, `SESSION_MAX_AGE_HOURS` (default 12), `SESSION_NOT_BEFORE`
+and `OIDC_LOGOUT_AT_IDP=true` to also end the provider session on sign-out.
 
-Sign-in is refused when the provider reports `email_verified: false`.
+**Which claim identifies the person.** The address is read from one claim: `email`, or the one
+named by `OIDC_EMAIL_CLAIM`. With the standard `email` claim, sign-in is refused unless the
+provider also sends `email_verified: true`; set `OIDC_ALLOW_UNVERIFIED_EMAIL=true` only for a
+provider you control that does not send it. A claim you name yourself is taken as is.
+
+**Required claims.** `OIDC_REQUIRED_CLAIMS` lists claims every sign-in must carry, as
+`name=value` pairs separated by commas; `|` separates alternatives
+(`hd=example.com,tid=1111|2222`). Values are compared exactly. A sign-in that does not match
+is refused before any access rule is looked at. Use it to pin a shared provider to your
+organization: `hd` for Google Workspace, `tid` for Entra.
+
+`OIDC_ALLOW_INSECURE_ISSUER=true` permits an `http://` issuer, for a local test provider only.
 
 Leaving `OIDC_CLIENT_SECRET` empty configures a public client that relies on PKCE alone.
 
@@ -99,8 +135,8 @@ AUTH_PROXY_AUDIENCE=<application AUD tag>
 
 Set `AUTH_PROXY_JWT_HEADER`, `AUTH_PROXY_JWKS_URL`, `AUTH_PROXY_ISSUER` and
 `AUTH_PROXY_AUDIENCE` (and optionally `AUTH_PROXY_EMAIL_CLAIM`, `AUTH_PROXY_GROUPS_CLAIM`).
-The keys must be served as a JWKS over https. Only asymmetric signature algorithms are
-accepted.
+The keys must be served as a JWKS over https (`AUTH_PROXY_ALLOW_INSECURE_JWKS=true` lifts
+that for a local test proxy only). Only asymmetric signature algorithms are accepted.
 
 ## `AUTH_PROVIDER=proxy-header` — oauth2-proxy, nginx `auth_request`, Traefik ForwardAuth
 
@@ -131,6 +167,11 @@ No sign-in; every visitor is an admin. For local development and demos. Refused 
 and rejects everything while `CRON_SECRET` is unset or shorter than 16 characters. If an
 access proxy sits in front of the app, either let that path through for your scheduler or call
 it from inside the network.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/cron/dns-check` | Refresh the DNS checks of every domain (`?domain=` for one). |
+| `GET /api/cron/status` | Ingest health: `200` while a run has completed within `INGEST_STALE_HOURS`, `503` otherwise. Point a monitor at it. |
 
 `/api/healthz` and `/api/readyz` are unauthenticated and return only `{"ok": true|false}`.
 

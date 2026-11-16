@@ -72,6 +72,25 @@ describe('diagnoseSource', () => {
     expect(d.tone).toBe('warn')
   })
 
+  it('does not call a sender unauthorized when the SPF lookup was incomplete', () => {
+    // a DNS timeout during the last check: the include that covers this IP is missing
+    const partial = { ...spf(['198.51.100.0/24']), incomplete: true }
+    const d = diagnoseSource(source({}), partial)
+    expect(d.verdict).not.toMatch(/Unauthorized|Not in SPF/)
+    expect(d.details.join(' ')).toMatch(/could not be fully resolved/)
+    // the record itself could not be fetched: not "publishes no SPF record"
+    const unknown = diagnoseSource(source({}), { ...spf([], false), incomplete: true })
+    expect(unknown.verdict).not.toMatch(/no SPF record/)
+    expect(unknown.details.join(' ')).not.toMatch(/publishes no SPF/)
+    // a match found in a partial expansion still counts
+    expect(diagnoseSource(source({}), { ...spf(['192.0.2.0/24']), incomplete: true }).details.join(' ')).toMatch(/is authorized/)
+  })
+
+  it('survives a malformed stored expansion', () => {
+    const broken = { ...spf([]), networks: [{ cidr: '2001:db8::/abc', via: 'x' }, null] } as unknown as ReturnType<typeof spf>
+    expect(() => diagnoseSource(source({ source_ip: '2001:db8::1' }), broken)).not.toThrow()
+  })
+
   it('handles a domain with no SPF and missing DNS data', () => {
     expect(diagnoseSource(source({}), spf([], false)).verdict).toMatch(/no SPF record/)
     const unknown = diagnoseSource(source({}), undefined)

@@ -25,11 +25,13 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0
 # Self-contained server from `output: 'standalone'` (includes the pg driver),
 # plus the migration runner and its SQL files.
-COPY --from=build --chown=node:node /app/.next/standalone ./
-COPY --from=build --chown=node:node /app/.next/static ./.next/static
-COPY --chown=node:node scripts/migrate.mjs ./scripts/migrate.mjs
-COPY --chown=node:node db ./db
-USER node
+COPY --from=build --chown=1000:1000 /app/.next/standalone ./
+COPY --from=build --chown=1000:1000 /app/.next/static ./.next/static
+COPY --chown=1000:1000 scripts/migrate.mjs ./scripts/migrate.mjs
+COPY --chown=1000:1000 db ./db
+# The image's "node" user, by number: Kubernetes can only verify
+# runAsNonRoot against a numeric UID.
+USER 1000:1000
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

@@ -76,8 +76,24 @@ export function loginCookieName(env: Env = process.env): string {
   return `${isSecureDeployment(env) ? '__Host-' : ''}dmarcscope_login`
 }
 
+// Identity and group membership are captured at sign-in and live for this
+// long, so it is also the longest a removal at the identity provider can take
+// to reach this app. Capped at 7 days.
 export function sessionTtlSeconds(env: Env = process.env): number {
-  return envInt(env.SESSION_MAX_AGE_HOURS, 12, 1, 24 * 30) * 3600
+  return envInt(env.SESSION_MAX_AGE_HOURS, 12, 1, 24 * 7) * 3600
+}
+
+// SESSION_NOT_BEFORE=<ISO timestamp>: sessions issued before that moment are
+// rejected. Sessions are stateless, so this is the revocation lever: set it
+// to "now" and everyone signed in earlier has to sign in again.
+export function sessionNotBeforeSeconds(env: Env = process.env): number | null {
+  const raw = env.SESSION_NOT_BEFORE?.trim()
+  if (!raw) return null
+  const ms = Date.parse(raw)
+  if (Number.isNaN(ms)) {
+    throw new ConfigError('SESSION_NOT_BEFORE must be an ISO timestamp, e.g. 2026-01-31T09:00:00Z.')
+  }
+  return Math.floor(ms / 1000)
 }
 
 export const LOGIN_TTL_SECONDS = 600
@@ -104,8 +120,10 @@ export async function sealSession(identity: Identity, env: Env = process.env): P
 }
 
 export async function unsealSession(token: string | undefined, env: Env = process.env): Promise<Identity | null> {
+  const notBefore = sessionNotBeforeSeconds(env)
   const p = await unseal(token, 'session', env)
   if (!p || typeof p.sub !== 'string' || typeof p.email !== 'string') return null
+  if (notBefore != null && (typeof p.iat !== 'number' || p.iat < notBefore)) return null
   return {
     sub: p.sub,
     email: p.email,

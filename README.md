@@ -44,13 +44,17 @@ Needs Docker. This starts PostgreSQL and the dashboard with sign-in disabled, an
 synthetic reports so there is something to look at.
 
 ```bash
-cp .env.example .env                       # defaults: AUTH_PROVIDER=none
-docker compose up -d --build
+cp .env.example .env
+echo 'AUTH_ALLOW_INSECURE_NONE=true' >> .env
 python3 scripts/demo_reports.py demo-reports
+docker compose up -d --build
 docker compose run --rm ingest import /reports
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. (`.env.example` ships with `AUTH_PROVIDER=none`, which the
+production image refuses unless `AUTH_ALLOW_INSECURE_NONE=true` says you mean it. Compose
+publishes the port on localhost only. Remove that line and pick a real sign-in method before
+anyone else can reach it.)
 
 ## Set it up for real
 
@@ -82,7 +86,7 @@ Requirements: Node.js 20.9+, Python 3.11+, PostgreSQL 13+.
 ```bash
 npm ci
 cp .env.example .env.local                 # point DATABASE_URL at your database
-npm run db:migrate
+DATABASE_URL=... npm run db:migrate        # the migration script does not read .env.local
 npm run dev
 
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt

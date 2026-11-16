@@ -14,7 +14,7 @@ vi.mock('node:dns/promises', () => ({
   resolveMx: vi.fn(async (name: string) => records[name.toLowerCase()]?.mx ?? Promise.reject(notFound())),
 }))
 
-import { expandSpf, matchIpInNetworks } from '@/lib/spf'
+import { expandSpf, matchIpInNetworks, type SpfResolver } from '@/lib/spf'
 
 beforeEach(() => {
   for (const k of Object.keys(records)) delete records[k]
@@ -43,6 +43,20 @@ describe('matchIpInNetworks', () => {
     expect(matchIpInNetworks('100.1.2.3', [{ cidr: '128.0.0.0/1', via: 'x' }])).toBeNull()
     expect(matchIpInNetworks('999.1.1.1', nets)).toBeNull()
     expect(matchIpInNetworks('', nets)).toBeNull()
+  })
+  it('skips malformed stored networks instead of throwing', () => {
+    const junk = [
+      { cidr: '2001:db8::/abc', via: 'bad prefix' },
+      { cidr: '2001:db8::/', via: 'empty prefix' },
+      { cidr: '2001:db8::/129', via: 'too long' },
+      { cidr: '192.0.2.0/x', via: 'bad v4 prefix' },
+      { cidr: '192.0.2.0/24/8', via: 'two prefixes' },
+      { via: 'no cidr' } as unknown as { cidr: string; via: string },
+      { cidr: '2001:db8::/32', via: 'good v6' },
+      { cidr: '192.0.2.0/24', via: 'good v4' },
+    ]
+    expect(matchIpInNetworks('2001:db8::5', junk)?.via).toBe('good v6')
+    expect(matchIpInNetworks('192.0.2.5', junk)?.via).toBe('good v4')
   })
 })
 
@@ -94,6 +108,67 @@ describe('expandSpf', () => {
     expect(r.lookups).toBeGreaterThan(10)
     expect(r.networks).toHaveLength(10)
     expect(r.notes.join(' ')).toMatch(/Lookup limit/)
+  })
+
+  it('drops malformed ranges instead of storing them', async () => {
+    records['typo.test'] = { txt: ['v=spf1 ip6:2001:db8::/abc ip4:192.0.2.0/33 ip4:not-an-ip ip6:2001:db8::/200 ip4:192.0.2.7 -all'] }
+    const r = await expandSpf('typo.test')
+    expect(r.networks).toEqual([{ cidr: '192.0.2.7', via: 'top-level' }])
+    expect(r.notes.filter((n) => /malformed/.test(n))).toHaveLength(4)
+    expect(r.incomplete).toBe(false)
+  })
+
+  it('applies a/NN to IPv4 and //NN to IPv6 addresses only', async () => {
+    records['dual.test'] = { txt: ['v=spf1 a/24//64 a:only4.test/28 -all'], a: ['203.0.113.10'], aaaa: ['2001:db8::1'] }
+    records['only4.test'] = { a: ['198.51.100.9'], aaaa: ['2001:db8:1::1'] }
+    const r = await expandSpf('dual.test')
+    expect(r.networks.map((n) => n.cidr).sort()).toEqual(['198.51.100.9/28', '2001:db8:1::1', '2001:db8::1/64', '203.0.113.10/24'])
+  })
+
+  const servfail = () => Object.assign(new Error('SERVFAIL'), { code: 'ESERVFAIL' })
+  const resolver = (over: Partial<SpfResolver>): SpfResolver => ({
+    resolveTxt: async (name) => {
+      const r = records[name.toLowerCase()]?.txt
+      if (!r) throw notFound()
+      return r.map((t) => [t])
+    },
+    resolveMx: async () => Promise.reject(notFound()),
+    resolve4: async () => Promise.reject(notFound()),
+    resolve6: async () => Promise.reject(notFound()),
+    ...over,
+  })
+
+  it('a failed lookup of the record itself is "unknown", not "no SPF"', async () => {
+    const r = await expandSpf('down.test', { resolver: resolver({ resolveTxt: async () => Promise.reject(servfail()) }) })
+    expect(r.has_spf).toBe(false)
+    expect(r.incomplete).toBe(true)
+    expect(r.notes.join(' ')).toMatch(/TXT down\.test could not be resolved/)
+  })
+
+  it('a failed include marks the expansion incomplete and keeps the rest', async () => {
+    records['half.test'] = { txt: ['v=spf1 include:flaky.test ip4:192.0.2.1 a -all'] }
+    const base = resolver({})
+    const r = await expandSpf('half.test', {
+      resolver: resolver({
+        resolveTxt: async (name) => (name === 'flaky.test' ? Promise.reject(servfail()) : base.resolveTxt(name)),
+        resolve4: async () => Promise.reject(servfail()),
+      }),
+    })
+    expect(r.has_spf).toBe(true)
+    expect(r.incomplete).toBe(true)
+    expect(r.networks).toEqual([{ cidr: '192.0.2.1', via: 'top-level' }])
+    // "does not exist" is an answer, not a failure
+    expect(r.notes.join(' ')).not.toMatch(/AAAA/)
+  })
+
+  it('stops when the time budget is spent', async () => {
+    records['slow.test'] = { txt: ['v=spf1 include:a.slow.test include:b.slow.test -all'] }
+    records['a.slow.test'] = { txt: ['v=spf1 ip4:192.0.2.1 -all'] }
+    records['b.slow.test'] = { txt: ['v=spf1 ip4:192.0.2.2 -all'] }
+    const r = await expandSpf('slow.test', { budgetMs: -1 })
+    expect(r.networks).toEqual([])
+    expect(r.incomplete).toBe(true)
+    expect(r.notes.join(' ')).toMatch(/Time budget/)
   })
 
   it('follows redirect=', async () => {

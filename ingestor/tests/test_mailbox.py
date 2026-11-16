@@ -176,5 +176,85 @@ def test_a_mailbox_failure_is_recorded_on_the_run(monkeypatch, db_settings):
     with pytest.raises(OSError):
         runner.run_ingest(replace(db_settings, **IMAP))
     with psycopg.connect(db_settings.database_url) as conn:
-        finished, error = conn.execute("SELECT finished_at IS NOT NULL, errors->0->>'error' FROM ingest_runs").fetchone()
-    assert finished is True and "connection refused" in error
+        finished, failed, error = conn.execute(
+            "SELECT finished_at IS NOT NULL, failed, errors->0->>'error' FROM ingest_runs"
+        ).fetchone()
+    assert finished is True and failed is True and "connection refused" in error
+
+
+def test_abort_run_stops_the_loop_and_leaves_messages_unseen(monkeypatch):
+    fake = FakeImap({b"1": b"a", b"2": b"b", b"3": b"c"})
+    calls = []
+
+    def handle(raw):
+        calls.append(raw)
+        raise mailbox.AbortRun("database connection lost")
+
+    with pytest.raises(mailbox.AbortRun):
+        _drain(monkeypatch, fake, Settings(database_url="x", **IMAP), handle)
+    assert calls == [b"c"]  # not once per remaining message
+    assert fake.seen == set() and fake.logged_out
+
+
+def test_losing_the_database_mid_run_fails_fast_and_closes_the_run(monkeypatch, db_settings):
+    import psycopg
+
+    fake = FakeImap({str(i).encode(): report_email(zipped(report_xml(report_id=f"r{i}"))) for i in range(1, 6)})
+    monkeypatch.setattr(mailbox, "_connect", lambda s: fake)
+    stored = []
+    real_insert = runner.store.insert_aggregate_report
+
+    def insert_then_drop(conn, report, settings):
+        if stored:
+            conn.close()  # the server went away
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+        stored.append(1)
+        return real_insert(conn, report, settings)
+
+    monkeypatch.setattr(runner.store, "insert_aggregate_report", insert_then_drop)
+
+    with pytest.raises(mailbox.AbortRun, match="database connection lost"):
+        runner.run_ingest(replace(db_settings, **IMAP, enrich_budget_seconds=0))
+
+    assert len(fake.seen) == 1  # the one stored; the other four were not even fetched twice
+    with psycopg.connect(db_settings.database_url) as conn:
+        rows = conn.execute("SELECT finished_at IS NOT NULL, failed, messages_fetched, reports_parsed FROM ingest_runs").fetchall()
+        # the original error is on the run, not a secondary "connection is closed"
+        error = conn.execute("SELECT errors->0->>'error' FROM ingest_runs").fetchone()[0]
+    assert rows == [(True, True, 2, 1)]
+    assert "AbortRun" in error and "server closed the connection" in error
+    # and the slot is free for the next run straight away
+    assert runner.store.start_run(psycopg.connect(db_settings.database_url), 900) is not None
+
+
+def test_a_retryable_database_error_does_not_abort_the_run(monkeypatch, db_settings):
+    import psycopg
+
+    fake = FakeImap({b"1": report_email(zipped(report_xml(report_id="a"))), b"2": report_email(zipped(report_xml(report_id="b")))})
+    monkeypatch.setattr(mailbox, "_connect", lambda s: fake)
+    real_insert = runner.store.insert_aggregate_report
+    calls = []
+
+    def deadlock_once(conn, report, settings):
+        calls.append(1)
+        if len(calls) == 1:
+            raise psycopg.errors.DeadlockDetected("deadlock detected")
+        return real_insert(conn, report, settings)
+
+    monkeypatch.setattr(runner.store, "insert_aggregate_report", deadlock_once)
+    stats = runner.run_ingest(replace(db_settings, **IMAP, enrich_budget_seconds=0))
+
+    assert (stats["fetched"], stats["stored"], len(stats["errors"])) == (2, 1, 1)
+    assert len(fake.seen) == 1  # the failed message stays unread for the next run
+    with psycopg.connect(db_settings.database_url) as conn:
+        assert conn.execute("SELECT finished_at IS NOT NULL, failed FROM ingest_runs").fetchall() == [(True, False)]
+
+
+def test_warns_when_allowed_domains_is_unset(monkeypatch, db_settings, caplog):
+    monkeypatch.setattr(mailbox, "_connect", lambda s: FakeImap({}))
+    with caplog.at_level("WARNING", logger="ingestor"):
+        runner.run_ingest(replace(db_settings, **IMAP, enrich_budget_seconds=0))
+        assert "ALLOWED_DOMAINS is not set" in caplog.text
+        caplog.clear()
+        runner.run_ingest(replace(db_settings, **IMAP, enrich_budget_seconds=0, allowed_domains=frozenset({"example.com"})))
+        assert "ALLOWED_DOMAINS" not in caplog.text

@@ -14,6 +14,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY ingestor ./ingestor
 RUN useradd --system --uid 10001 --no-create-home ingest
-USER ingest
+# By number: Kubernetes can only verify runAsNonRoot against a numeric UID.
+USER 10001:10001
 ENTRYPOINT ["python", "-m", "ingestor"]
 CMD ["run"]

@@ -19,53 +19,110 @@ export type SpfExpansion = {
   networks: SpfNetwork[]
   lookups: number
   notes: string[]
+  // True when a lookup timed out or failed (as opposed to "no such record"),
+  // or the time budget ran out: `networks` may be missing ranges, so an IP
+  // that matches nothing is "unknown", not "unauthorized". (Absent on
+  // expansions stored by versions before this field existed.)
+  incomplete?: boolean
+}
+
+// The DNS calls expandSpf makes; replaceable in tests.
+export type SpfResolver = {
+  resolveTxt(name: string): Promise<string[][]>
+  resolveMx(name: string): Promise<Array<{ exchange: string; priority: number }>>
+  resolve4(name: string): Promise<string[]>
+  resolve6(name: string): Promise<string[]>
 }
 
 const MAX_LOOKUPS = 10
 const TIMEOUT_MS = 4000
+// The record being walked is untrusted (anyone can publish an include tree),
+// so the whole expansion is bounded, not just each query.
+const TOTAL_BUDGET_MS = 20_000
 
 function withTimeout<T>(p: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
     p,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('DNS timeout')), TIMEOUT_MS)),
-  ])
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('DNS timeout')), TIMEOUT_MS)
+    }),
+  ]).finally(() => clearTimeout(timer))
 }
 
-async function safeTxt(name: string): Promise<string[]> {
-  try {
-    const chunks = await withTimeout(resolveTxt(name))
-    return chunks.map((parts) => parts.join(''))
-  } catch {
-    return []
-  }
+// "The name exists but has no such record" and "the name does not exist" are
+// answers. Everything else (timeout, SERVFAIL, refused) is a failed lookup.
+function isNoRecord(e: unknown): boolean {
+  const code = (e as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOTFOUND' || code === 'ENODATA'
 }
 
-async function safeA(name: string): Promise<string[]> {
-  const out: string[] = []
-  try {
-    out.push(...(await withTimeout(resolve4(name))))
-  } catch {
-    /* no A records */
-  }
-  try {
-    out.push(...(await withTimeout(resolve6(name))))
-  } catch {
-    /* no AAAA records */
-  }
-  return out
+// [addr, prefix] for a syntactically valid CIDR, else null.
+function parseCidr(cidr: string, family: 4 | 6): [string, number] | null {
+  const m = /^([^/]+)(?:\/(\d{1,3}))?$/.exec(cidr)
+  if (!m) return null
+  const max = family === 4 ? 32 : 128
+  const prefix = m[2] === undefined ? max : Number(m[2])
+  if (prefix > max) return null
+  const valid = family === 4 ? ipv4ToInt(m[1]) != null : m[1].includes(':') && ipv6ToBigInt(m[1]) != null
+  return valid ? [m[1], prefix] : null
 }
 
-export async function expandSpf(domain: string): Promise<SpfExpansion> {
+export async function expandSpf(
+  domain: string,
+  opts: { resolver?: SpfResolver; budgetMs?: number } = {}
+): Promise<SpfExpansion> {
+  const dns: SpfResolver = opts.resolver ?? { resolveTxt, resolveMx, resolve4, resolve6 }
+  const deadline = Date.now() + (opts.budgetMs ?? TOTAL_BUDGET_MS)
   const result: SpfExpansion = {
     expanded_at: new Date().toISOString(),
     has_spf: false,
     networks: [],
     lookups: 0,
     notes: [],
+    incomplete: false,
   }
   const visited = new Set<string>()
 
+  function failed(what: string): void {
+    result.incomplete = true
+    if (result.notes.length < 20) result.notes.push(`${what} could not be resolved (DNS timeout or server failure).`)
+  }
+
+  let budgetNoted = false
+  function outOfTime(): boolean {
+    if (Date.now() < deadline) return false
+    if (!budgetNoted) result.notes.push('Time budget for SPF expansion reached; the result is partial.')
+    budgetNoted = true
+    result.incomplete = true
+    return true
+  }
+
+  // null = lookup failed (already recorded); [] = no such record.
+  async function txt(name: string): Promise<string[] | null> {
+    try {
+      return (await withTimeout(dns.resolveTxt(name))).map((parts) => parts.join(''))
+    } catch (e) {
+      if (isNoRecord(e)) return []
+      failed(`TXT ${name}`)
+      return null
+    }
+  }
+
+  async function addresses(name: string): Promise<string[]> {
+    const out: string[] = []
+    for (const [label, lookup] of [['A', dns.resolve4], ['AAAA', dns.resolve6]] as const) {
+      try {
+        out.push(...(await withTimeout(lookup(name))))
+      } catch (e) {
+        if (!isNoRecord(e)) failed(`${label} ${name}`)
+      }
+    }
+    return out
+  }
+
   async function walk(target: string, via: string[], path: Set<string>): Promise<void> {
+    if (outOfTime()) return
     const key = target.toLowerCase()
     if (path.has(key)) {
       result.notes.push(`SPF include cycle detected at ${target}; skipped.`)
@@ -77,7 +134,8 @@ export async function expandSpf(domain: string): Promise<SpfExpansion> {
     visited.add(key)
     path = new Set(path).add(key)
 
-    const txts = await safeTxt(target)
+    const txts = await txt(target)
+    if (txts === null) return // unknown, not "no SPF record"
     const spf = txts.find((t) => t.toLowerCase().startsWith('v=spf1'))
     if (!spf) {
       if (via.length === 0) return
@@ -98,9 +156,16 @@ export async function expandSpf(domain: string): Promise<SpfExpansion> {
         nameEnd === -1 ? stripped.toLowerCase() : stripped.slice(0, nameEnd).toLowerCase() + stripped.slice(nameEnd)
       const viaLabel = via.length > 0 ? via.join(' > ') : 'top-level'
 
+      if (outOfTime()) return
       if (term.startsWith('ip4:') || term.startsWith('ip6:')) {
         const cidr = term.slice(4)
-        result.networks.push({ cidr, via: viaLabel })
+        // Published records contain typos; a malformed range must not reach
+        // the matcher (or anything else that reads the stored expansion).
+        if (parseCidr(cidr, term.startsWith('ip4:') ? 4 : 6)) {
+          result.networks.push({ cidr, via: viaLabel })
+        } else if (result.notes.length < 20) {
+          result.notes.push(`Ignored malformed mechanism "${term.slice(0, 80)}" (${viaLabel}).`)
+        }
       } else if (term.startsWith('include:')) {
         if (++result.lookups > MAX_LOOKUPS) {
           result.notes.push(`Lookup limit (${MAX_LOOKUPS}) reached; expansion truncated at ${term}.`)
@@ -115,22 +180,23 @@ export async function expandSpf(domain: string): Promise<SpfExpansion> {
         await walk(term.slice(9), [...via, term], path)
       } else if (term === 'a' || term.startsWith('a:') || term.startsWith('a/')) {
         if (++result.lookups > MAX_LOOKUPS) continue
-        const [hostPart, prefix] = parseHostPrefix(term.slice(1), target)
-        for (const ip of await safeA(hostPart)) {
-          result.networks.push({ cidr: applyPrefix(ip, prefix), via: `${viaLabel} > a` })
+        const [hostPart, prefixes] = parseHostPrefix(term.slice(1), target)
+        for (const ip of await addresses(hostPart)) {
+          result.networks.push({ cidr: applyPrefix(ip, prefixes), via: `${viaLabel} > a` })
         }
       } else if (term === 'mx' || term.startsWith('mx:') || term.startsWith('mx/')) {
         if (++result.lookups > MAX_LOOKUPS) continue
-        const [hostPart, prefix] = parseHostPrefix(term.slice(2), target)
+        const [hostPart, prefixes] = parseHostPrefix(term.slice(2), target)
         try {
-          const mxs = await withTimeout(resolveMx(hostPart))
+          const mxs = await withTimeout(dns.resolveMx(hostPart))
           for (const mx of mxs.slice(0, 10)) {
-            for (const ip of await safeA(mx.exchange)) {
-              result.networks.push({ cidr: applyPrefix(ip, prefix), via: `${viaLabel} > mx:${mx.exchange}` })
+            if (outOfTime()) return
+            for (const ip of await addresses(mx.exchange)) {
+              result.networks.push({ cidr: applyPrefix(ip, prefixes), via: `${viaLabel} > mx:${mx.exchange}` })
             }
           }
-        } catch {
-          /* no MX */
+        } catch (e) {
+          if (!isNoRecord(e)) failed(`MX ${hostPart}`)
         }
       } else if (term.startsWith('exists:') || term.startsWith('ptr')) {
         result.notes.push(`Mechanism "${term}" cannot be expanded to IP ranges; ignored for attribution.`)
@@ -151,24 +217,28 @@ export async function expandSpf(domain: string): Promise<SpfExpansion> {
   return result
 }
 
-function parseHostPrefix(rest: string, defaultHost: string): [string, number | null] {
-  // rest is like "", ":host", ":host/24", "/24"
-  let host = defaultHost
-  let prefix: number | null = null
-  let s = rest
-  if (s.startsWith(':')) s = s.slice(1)
+type Prefixes = { v4: number | null; v6: number | null }
+
+function parseHostPrefix(rest: string, defaultHost: string): [string, Prefixes] {
+  // rest is like "", ":host", ":host/24", "/24", "/24//64", "//64"
+  // (RFC 7208 §5.3 dual-cidr-length: "/<ip4 bits>" then "//<ip6 bits>").
+  let s = rest.startsWith(':') ? rest.slice(1) : rest
+  const prefixes: Prefixes = { v4: null, v6: null }
   const slash = s.indexOf('/')
   if (slash !== -1) {
-    prefix = Number.parseInt(s.slice(slash + 1), 10) || null
+    const [v4, v6] = s.slice(slash + 1).split('//')
+    const bits = (raw: string | undefined, max: number): number | null =>
+      raw && /^\d{1,3}$/.test(raw) && Number(raw) <= max ? Number(raw) : null
+    prefixes.v4 = bits(v4, 32)
+    prefixes.v6 = bits(v6, 128)
     s = s.slice(0, slash)
   }
-  if (s) host = s
-  return [host, prefix]
+  return [s || defaultHost, prefixes]
 }
 
-function applyPrefix(ip: string, prefix: number | null): string {
-  if (prefix == null) return ip
-  return `${ip}/${prefix}`
+function applyPrefix(ip: string, prefixes: Prefixes): string {
+  const prefix = ip.includes(':') ? prefixes.v6 : prefixes.v4
+  return prefix == null ? ip : `${ip}/${prefix}`
 }
 
 // ---------- IP matching ----------
@@ -216,24 +286,19 @@ export function matchIpInNetworks(ip: string, networks: SpfNetwork[]): SpfNetwor
   if (ipV4 == null && ipV6 == null) return null
 
   for (const net of networks) {
-    const [addr, prefixStr] = net.cidr.split('/')
-    const netIsV6 = addr.includes(':')
-    if (netIsV6 !== isV6) continue
+    // Stored expansions are data: anything malformed is skipped, never thrown on.
+    if (typeof net?.cidr !== 'string') continue
+    const parsed = parseCidr(net.cidr, isV6 ? 6 : 4)
+    if (!parsed) continue
+    const [addr, prefix] = parsed
 
     if (!isV6) {
-      const netInt = ipv4ToInt(addr)
-      if (netInt == null) continue
-      const prefix = prefixStr ? Number.parseInt(prefixStr, 10) : 32
-      if (prefix < 0 || prefix > 32) continue
+      const netInt = ipv4ToInt(addr)!
       const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0
       if (((ipV4! & mask) >>> 0) === ((netInt & mask) >>> 0)) return net
     } else {
-      const netInt = ipv6ToBigInt(addr)
-      if (netInt == null) continue
-      const prefix = prefixStr ? Number.parseInt(prefixStr, 10) : 128
-      if (prefix < 0 || prefix > 128) continue
       const shift = BigInt(128 - prefix)
-      if (ipV6! >> shift === netInt >> shift) return net
+      if (ipV6! >> shift === ipv6ToBigInt(addr)! >> shift) return net
     }
   }
   return null

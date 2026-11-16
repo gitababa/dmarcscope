@@ -13,7 +13,8 @@ const ERRORS: Record<string, string> = {
   expired: 'That sign-in attempt expired or was started in another browser. Please try again.',
   failed: 'Sign-in could not be completed. Please try again; if it keeps happening, contact your administrator.',
   no_email: 'Your identity provider did not share an email address, which this app needs to identify you.',
-  unverified_email: 'Your identity provider reports that your email address is not verified.',
+  unverified_email: 'Your identity provider did not confirm that your email address is verified.',
+  wrong_account: 'That account does not belong to the organization this app is set up for. Sign in with your work account.',
   provider: 'The identity provider could not be reached. Please try again in a moment.',
   config: 'Sign-in is not configured correctly. An administrator needs to check the server configuration.',
 }

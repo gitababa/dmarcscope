@@ -49,8 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}))
         return 1
 
-    print(json.dumps({"ok": True, **stats}))
-    return 0
+    # `run` leaves failed messages unread for the next run to retry, so they do
+    # not fail the job. `import` was pointed at specific files: any that could
+    # not be loaded (or finding none at all) is a failure of the command.
+    ok = not (args.command == "import" and stats["errors"])
+    print(json.dumps({"ok": ok, **stats}))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

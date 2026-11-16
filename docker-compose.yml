@@ -2,7 +2,7 @@
 # ingest job. Configure via a .env file next to this one (see .env.example);
 # DATABASE_URL is set here and does not need to be in it.
 #
-#   docker compose up -d                 # database, migrations, dashboard on :3000
+#   docker compose up -d                 # database, migrations, dashboard on 127.0.0.1:3000
 #   docker compose run --rm ingest       # one ingest run (schedule this, e.g. from cron)
 #   docker compose run --rm ingest import /reports     # load files from ./demo-reports
 
@@ -39,8 +39,14 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: *database-url
+      # Fixed inside the container, whatever .env says; change where it is
+      # published with WEB_BIND / WEB_PORT instead.
+      PORT: '3000'
+      HOSTNAME: 0.0.0.0
     ports:
-      - '${PORT:-3000}:3000'
+      # Loopback only by default: put a TLS reverse proxy in front, or set
+      # WEB_BIND=0.0.0.0 to publish the port directly.
+      - '${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000'
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -147,8 +147,43 @@ describe.skipIf(!url)('database queries', () => {
     expect(await q.getObservedDkimSigners('example.com')).toEqual([{ selector: 'sel1', signing_domain: 'example.com' }])
 
     const runs = await q.getRecentIngestRuns(5)
-    expect(runs[0]).toMatchObject({ had_errors: true, stalled: false, messages_fetched: 12 })
+    expect(runs[0]).toMatchObject({ had_errors: true, failed: false, stalled: false, messages_fetched: 12 })
     expect(runs[1]).toMatchObject({ stalled: true, finished_at: null })
+  })
+
+  it('does not treat wildcard characters in a reported signing domain as a match', async () => {
+    const q = await import('@/lib/queries')
+    await admin.query(`
+      INSERT INTO records (report_id, domain_id, source_ip, message_count, dkim_results, spf_results, period_start, period_end) VALUES
+        (1, 1, '203.0.113.99', 0, '[{"domain":"%","selector":"evil1","result":"pass"},
+                                    {"domain":"e_ample.com","selector":"evil2","result":"pass"},
+                                    {"domain":"mail.example.com","selector":"sub1","result":"pass"}]', '[]',
+          NOW() - INTERVAL '2 days', NOW() - INTERVAL '1 day')
+    `)
+    const signers = await q.getObservedDkimSigners('example.com')
+    expect(signers.map((s) => s.selector).sort()).toEqual(['sel1', 'sub1'])
+    await admin.query(`DELETE FROM records WHERE source_ip = '203.0.113.99'`)
+  })
+
+  it('reports ingest health from completed, non-failed runs', async () => {
+    const q = await import('@/lib/queries')
+    // seeded: one run finished 59 minutes ago
+    expect(await q.getIngestHealth()).toMatchObject({ status: 'ok', stale_after_hours: 36, last_run_failed: false })
+
+    // a newer run that failed outright does not count as success...
+    await admin.query(`INSERT INTO ingest_runs (started_at, finished_at, failed) VALUES (NOW() - INTERVAL '1 minute', NOW(), TRUE)`)
+    expect(await q.getIngestHealth()).toMatchObject({ status: 'ok', last_run_failed: true })
+
+    // ...so once the last good run ages out, the status is stale
+    process.env.INGEST_STALE_HOURS = '1'
+    await admin.query(`UPDATE ingest_runs SET finished_at = NOW() - INTERVAL '2 hours' WHERE NOT failed AND finished_at IS NOT NULL`)
+    const stale = await q.getIngestHealth()
+    expect(stale).toMatchObject({ status: 'stale', stale_after_hours: 1, last_run_failed: true })
+    expect(stale.last_success_at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    delete process.env.INGEST_STALE_HOURS
+
+    await admin.query(`DELETE FROM ingest_runs`)
+    expect(await q.getIngestHealth()).toMatchObject({ status: 'never', last_success_at: null })
   })
 
   it('runs, stores and rate-limits DNS checks', async () => {

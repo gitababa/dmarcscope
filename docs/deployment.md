@@ -17,9 +17,18 @@ Plus two one-off or scheduled calls:
   `Authorization: Bearer $CRON_SECRET` refreshes the DNS health of every domain, which keeps
   the SPF attribution on the Issues page current.
 
+- **Ingest monitoring** (recommended) — `GET /api/cron/status` with the same bearer token
+  answers `200` while an ingest run has completed in the last `INGEST_STALE_HOURS` (default
+  36) and `503` otherwise. The dashboard keeps working on old data when the job stops, so
+  point an uptime monitor at this to hear about it; the overview page shows a warning too.
+
 Terminate TLS in front of the web app and set `APP_URL` to the public https URL.
 
 Probes: `GET /api/healthz` (liveness) and `GET /api/readyz` (database reachable).
+
+On a large database, cap query time in PostgreSQL as well:
+`ALTER ROLE <app user> SET statement_timeout = '30s'` (see `DATABASE_QUERY_TIMEOUT_MS` in
+[configuration.md](configuration.md)).
 
 ## Docker Compose (single host)
 
@@ -28,8 +37,9 @@ cp .env.example .env        # set AUTH_PROVIDER, access lists, IMAP_*, CRON_SECR
 docker compose up -d --build
 ```
 
-This runs PostgreSQL, applies migrations, and serves the dashboard on port 3000. Put a TLS
-reverse proxy (Caddy, nginx, Traefik) in front of it.
+This runs PostgreSQL, applies migrations, and serves the dashboard on `127.0.0.1:3000`. Put a
+TLS reverse proxy (Caddy, nginx, Traefik) on the same host in front of it. To publish the port
+on another address or port, set `WEB_BIND` / `WEB_PORT` in `.env`.
 
 Schedule the jobs from the host's crontab:
 
@@ -38,8 +48,8 @@ Schedule the jobs from the host's crontab:
 30 6 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" https://dmarc.example.com/api/cron/dns-check
 ```
 
-Set `POSTGRES_PASSWORD` in `.env` to change the database password, and back up the `pgdata`
-volume.
+Set `POSTGRES_PASSWORD` in `.env` before the first start (letters and digits only — it is
+placed in a connection URL), and back up the `pgdata` volume.
 
 ## Kubernetes
 
@@ -101,6 +111,10 @@ spec:
               resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
 ```
 
+Both images run as a numeric non-root user (1000 for the web app, 10001 for the worker), which
+is what `runAsNonRoot` checks. A Secret holds values literally, so do not copy the comment
+lines from `.env.example` into it.
+
 Expose the Service through your Ingress with TLS. The advisory lock in the migration runner
 makes it safe for several replicas to start at once. The ingest worker needs outbound access
 to the IMAP server, the database, and DNS (for reverse lookups).
@@ -138,8 +152,9 @@ The repository is also deployable to Vercel as-is: the Next.js app, plus the ing
 a Python function (`api/cron/ingest.py`) triggered by the crons in `vercel.json`.
 
 1. Import the repository and attach a PostgreSQL database (any provider; set `DATABASE_URL`).
-2. Set the environment variables from `.env.example`. Vercel provides `CRON_SECRET`
-   automatically once crons are declared.
+2. Set the environment variables from `.env.example`, including a `CRON_SECRET` you generate
+   yourself (`openssl rand -hex 32`). Vercel sends it as the bearer token on every cron
+   call; without it the crons are answered with 401.
 3. Apply migrations from your machine: `DATABASE_URL=… npm run db:migrate`.
 
 Vercel functions have a hard time limit, so the function variant of the ingest job defaults

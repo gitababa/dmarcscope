@@ -5,6 +5,7 @@ import {
   sealLoginState,
   sealSession,
   sessionCookieName,
+  sessionTtlSeconds,
   unsealLoginState,
   unsealSession,
 } from '@/lib/auth/session'
@@ -49,6 +50,21 @@ describe('session cookies', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('caps the session lifetime at 7 days', () => {
+    expect(sessionTtlSeconds({ SESSION_MAX_AGE_HOURS: '9999' })).toBe(7 * 24 * 3600)
+    expect(sessionTtlSeconds({})).toBe(12 * 3600)
+  })
+
+  it('rejects sessions issued before SESSION_NOT_BEFORE', async () => {
+    const token = await sealSession(identity, env)
+    const past = new Date(Date.now() - 3600_000).toISOString()
+    const future = new Date(Date.now() + 3600_000).toISOString()
+    expect(await unsealSession(token, { ...env, SESSION_NOT_BEFORE: past })).toEqual(identity)
+    expect(await unsealSession(token, { ...env, SESSION_NOT_BEFORE: future })).toBeNull()
+    // a typo must not quietly disable the cut-off
+    await expect(unsealSession(token, { ...env, SESSION_NOT_BEFORE: 'yesterday' })).rejects.toThrow(/SESSION_NOT_BEFORE/)
   })
 
   it('refuses a short secret', async () => {
