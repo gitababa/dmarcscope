@@ -24,10 +24,17 @@ def fake_dns(monkeypatch, slow: set[str] | None = None, gate: threading.Event | 
             raise OSError("no PTR")
         return PTR[ip], [], [ip]
 
-    def getaddrinfo(host, port):
-        if host not in FORWARD:
+    real_getaddrinfo = enrich.socket.getaddrinfo
+    names = {name.rstrip(".").lower() for name in PTR.values()}
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        # The socket module is shared: the database driver resolves its own
+        # host through this same function, so only the test's names are faked.
+        if host in FORWARD:
+            return [(None, None, None, "", (FORWARD[host], 0))]
+        if host in names:
             raise OSError("no such host")
-        return [(None, None, None, "", (FORWARD[host], 0))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
 
     monkeypatch.setattr(enrich.socket, "gethostbyaddr", gethostbyaddr)
     monkeypatch.setattr(enrich.socket, "getaddrinfo", getaddrinfo)
