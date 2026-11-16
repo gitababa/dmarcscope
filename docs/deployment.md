@@ -33,7 +33,7 @@ On a large database, cap query time in PostgreSQL as well:
 ## Docker Compose (single host)
 
 ```bash
-cp .env.example .env        # set AUTH_PROVIDER, access lists, IMAP_*, CRON_SECRET, APP_URL
+cp .env.example .env        # set APP_URL, APP_SECRET, IMAP_*; AUTH_PROVIDER and access lists if you use them
 docker compose up -d --build
 ```
 
@@ -157,6 +157,10 @@ a Python function (`api/cron/ingest.py`) triggered by the crons in `vercel.json`
    call; without it the crons are answered with 401.
 3. Apply migrations from your machine: `DATABASE_URL=… npm run db:migrate`.
 
+Keep `CRON_SECRET` in Vercel's environment even though the owner can also set a machine endpoint
+token in the panel: Vercel Cron sends the environment variable, and the Python ingest function
+reads its configuration from the environment only.
+
 Vercel functions have a hard time limit, so the function variant of the ingest job defaults
 to a 170-second mailbox budget per run; a large backlog is worked through over several runs.
 
@@ -165,5 +169,33 @@ to a 170-second mailbox budget per run; a large backlog is worked through over s
 - Upgrade by deploying the new images and running the migration command. Migrations only move
   forward.
 - All state is in PostgreSQL. Back it up with your usual tooling. The data can also be rebuilt
-  from the report emails if you keep them (`IMAP_PROCESSED_FOLDER`).
+  from the report emails if you keep them (`IMAP_PROCESSED_FOLDER`). Back up `APP_SECRET` too:
+  without it, the secrets saved in the panel cannot be decrypted.
 - The ingest job is idempotent: re-processing a report is a no-op.
+
+### From 1.1.x to 2.0
+
+Nothing in the environment has to change.
+
+1. Back up the database.
+2. Run the migrations with the new image (`node scripts/migrate.mjs`). Migration `0003` only adds
+   tables (users, settings, access rules, audit log, setup tokens); it changes no existing data.
+3. Deploy the new web image with the **same environment**. Sign-in, the access lists, the
+   machine endpoints and the dashboards behave exactly as before, and existing sessions stay
+   valid. People who sign in from now on are recorded in the users table, and the request gate
+   reads their role from the database on every request (one indexed query).
+4. Optional, to manage things in the browser from now on:
+   - add `APP_SECRET` (`openssl rand -base64 32`) and open `/setup` with the one-time setup token
+     the new version printed to its log when it first started (after 24 hours it expires; a
+     restart, or opening `/setup`, prints a new one). The wizard creates the owner account (see
+     [authentication.md](authentication.md#first-run-the-setup-wizard));
+   - run `node scripts/settings-import.mjs` to copy `ADMIN_EMAILS`, `ALLOWED_EMAILS`,
+     `ALLOWED_EMAIL_DOMAINS`, `ADMIN_GROUPS` and `ALLOWED_GROUPS` into the database, after which
+     those variables can be removed.
+
+Rolling back to 1.1.x after step 3 works: 1.1.x ignores the new tables.
+
+### Starting fresh with 2.0
+
+Set `DATABASE_URL`, `APP_URL` and `APP_SECRET`, run the migrations and start the web app. Its log
+prints a one-time setup token; open `/setup` and create the owner account.

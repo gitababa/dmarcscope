@@ -6,6 +6,58 @@ share one version number (`package.json` and `ingestor/__init__.py`).
 Upgrading: deploy the new images, then run the migration command
 (`node scripts/migrate.mjs`) before the new web version starts.
 
+## 2.0.0 (unreleased)
+
+2.0 moves configuration into the browser: after deploying with `DATABASE_URL`, `APP_URL` and
+`APP_SECRET`, an administrator sets up everything else in the app. It is being built in
+milestones (`docs/plan-2.0.md`); this section grows with each one.
+
+**Upgrading from 1.1.x:** run the migrations and deploy; nothing in the environment has to
+change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
+[docs/deployment.md](docs/deployment.md).
+
+### Added — milestone 1, foundation
+
+- Sign-in managed in the app when `AUTH_PROVIDER` is unset. With no owner yet the app serves only
+  a setup wizard (`/setup`), unlocked by a one-time token printed to the log (or `SETUP_TOKEN`).
+  It creates the owner account: password (scrypt) plus an authenticator app (TOTP), with ten
+  one-time recovery codes. `/setup` is gone once an owner exists.
+- Owner password sign-in, also on `oidc` deployments ("Owner sign-in" on the sign-in page), with
+  per-account and per-address lockout that does not reveal whether an account exists.
+- Roles `owner`, `admin`, `viewer`, read from the database on every request. Everyone who signs in
+  is recorded; someone no rule admits becomes a pending request. Disabling a user, changing their
+  role or setting `sessions_valid_after` applies on their next request.
+- Access rules in the database (email domain or group → role), next to the environment lists,
+  which keep working unchanged. `npm run settings:import` copies the lists into the database.
+- Settings store: environment variable, else the value saved in the panel, else the default;
+  validated, cached per instance for `SETTINGS_CACHE_SECONDS` and picked up by every instance
+  without a restart. First settings: application name, ingest staleness, session length and the
+  machine endpoint token (`APP_NAME`, `INGEST_STALE_HOURS`, `SESSION_MAX_AGE_HOURS`,
+  `CRON_SECRET`).
+- Secrets saved in the database are encrypted (AES-256-GCM, keys derived from `APP_SECRET`), in a
+  format the ingest worker reads too. `APP_SECRET_PREVIOUS` and `npm run secrets:reencrypt` rotate
+  `APP_SECRET`.
+- Audit log in the database (append-only; the database refuses changes), shown under
+  **Admin → Audit log**. The JSON audit lines on stdout stay.
+- A minimal **Admin** area: settings with where each value comes from, users, audit log.
+- `APP_SECRET`, `APP_SECRET_PREVIOUS`, `SETUP_TOKEN`, `SETTINGS_CACHE_SECONDS`,
+  `CLIENT_IP_HEADER`.
+
+### Changed
+
+- `AUTH_PROVIDER` is optional: unset now means "sign-in managed in the app" instead of a
+  configuration error.
+- `SESSION_SECRET` is optional when `APP_SECRET` is set. Where it is set it is used exactly as
+  before, so upgrading signs nobody out.
+- The request gate reads the user's role from the database (one indexed query per request). If
+  the database cannot be reached, pages and `/api` answer 503 instead of letting anyone in.
+  `/api/healthz` still needs no database.
+- A non-numeric `INGEST_STALE_HOURS` or `SESSION_MAX_AGE_HOURS` is reported as an error (in the
+  log and on the settings page) instead of silently becoming the default; out-of-range numbers
+  are still clamped as before.
+- With `AUTH_PROVIDER=none` every visitor has the owner role (previously admin).
+- The ingest worker needs `cryptography` (pinned in `requirements.txt`).
+
 ## 1.1.0
 
 Hardening and fixes from a full code review. **Read "Changed" before upgrading.**

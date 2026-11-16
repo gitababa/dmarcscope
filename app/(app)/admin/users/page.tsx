@@ -48,7 +48,7 @@ export default async function AdminUsersPage() {
               )}
               {users.map((u) => (
                 <tr key={u.id}>
-                  <td className="wrap">
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     <div className="source-name">{u.name || u.email}</div>
                     {u.name && <div className="source-meta">{u.email}</div>}
                   </td>

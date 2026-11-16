@@ -30,6 +30,7 @@ const ERRORS: Record<string, string> = {
   password_mismatch: 'The two passwords do not match.',
   proxy_identity: 'This deployment signs people in through an access proxy, and this request did not carry an identity from it.',
   code: 'That code is not right. Check the time on your phone and enter the current code.',
+  app_secret: 'APP_SECRET is not set (or shorter than 32 characters). Set it on the server and restart, then start setup again.',
 }
 
 const STEPS = ['Setup token', 'Owner account', 'Authenticator']
@@ -39,7 +40,8 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
   if (await ownerExists(db)) notFound()
 
   const { error } = await searchParams
-  const state = await unsealSetupState((await cookies()).get(purposeCookieName('setup'))?.value)
+  const noSecret = (process.env.APP_SECRET || '').length < 32
+  const state = noSecret ? null : await unsealSetupState((await cookies()).get(purposeCookieName('setup'))?.value)
   const appName = await getAppName()
 
   if (!state) {
@@ -53,7 +55,7 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
   }
 
   const current = !state ? 0 : state.step === 'account' ? 1 : 2
-  const message = error ? (ERRORS[error] ?? ERRORS.form) : null
+  const message = noSecret ? ERRORS.app_secret : error ? (ERRORS[error] ?? ERRORS.form) : null
   const proxied = ['proxy-jwt', 'proxy-header'].includes(authProvider())
 
   return (
@@ -65,7 +67,6 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
           {STEPS.map((s, i) => (
             <span key={s} aria-current={i === current ? 'step' : undefined}>
               {i + 1}. {s}
-              {i < STEPS.length - 1 ? ' ·' : ''}
             </span>
           ))}
         </div>
@@ -75,7 +76,7 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
           </div>
         )}
 
-        {current === 0 && (
+        {current === 0 && !noSecret && (
           <>
             <p>
               Create the owner account. The owner can always sign in with a password and an authenticator app, even
@@ -101,12 +102,21 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
           <form className="form" method="post" action="/setup/account">
             <div className="field">
               <label htmlFor="email">Email address</label>
-              <input id="email" name="email" type="email" autoComplete="username" required autoFocus={!proxied} disabled={proxied} />
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="username"
+                required
+                autoFocus={!proxied}
+                disabled={proxied}
+                defaultValue={state.draft?.email}
+              />
               {proxied && <span className="field-hint">The address your access proxy signs you in with is used.</span>}
             </div>
             <div className="field">
               <label htmlFor="name">Name (optional)</label>
-              <input id="name" name="name" type="text" autoComplete="name" maxLength={200} />
+              <input id="name" name="name" type="text" autoComplete="name" maxLength={200} defaultValue={state.draft?.name} />
             </div>
             <div className="field">
               <label htmlFor="password">Password</label>

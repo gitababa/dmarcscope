@@ -3,7 +3,7 @@ import { SubmitButton } from '@/components/client'
 import { Pill } from '@/components/ui'
 import { atLeast } from '@/lib/auth/roles'
 import { requirePageRole } from '@/lib/auth/server'
-import { type ResolvedSetting, configStore } from '@/lib/settings'
+import { REGISTRY, type ResolvedSetting, configStore } from '@/lib/settings'
 import { updateSettingAction } from './actions'
 import { AdminNav } from './nav'
 
@@ -14,7 +14,7 @@ const ERRORS: Record<string, string> = {
   owner_only: 'Only the owner can change that setting.',
   unknown: 'There is no such setting.',
   managed_by_environment: 'That setting is managed by an environment variable and cannot be changed here.',
-  invalid: 'That value is not valid for the setting.',
+  invalid: 'That value is not valid.',
 }
 
 const SOURCE_LABEL: Record<ResolvedSetting['source'], string> = {
@@ -28,6 +28,12 @@ export default async function AdminSettingsPage({ searchParams }: { searchParams
   const { error, saved, key } = await searchParams
   const settings = await configStore().list()
   const broken = settings.filter((s) => s.error)
+  // What a valid value looks like, from the registry (never text from the URL).
+  const requirement = (() => {
+    if (error !== 'invalid' || !key) return null
+    const r = REGISTRY.get(key)?.parse(undefined)
+    return r && !r.ok ? r.error : null
+  })()
 
   return (
     <>
@@ -42,7 +48,7 @@ export default async function AdminSettingsPage({ searchParams }: { searchParams
       {error && (
         <div className="notice bad" role="alert">
           {ERRORS[error] ?? 'The setting could not be saved.'}
-          {key && REGISTRY_LABEL(settings, key) ? ` (${REGISTRY_LABEL(settings, key)})` : ''}
+          {key && REGISTRY_LABEL(settings, key) ? ` ${REGISTRY_LABEL(settings, key)} ${requirement ?? ''}.` : ''}
         </div>
       )}
       {saved && !error && (
@@ -59,49 +65,32 @@ export default async function AdminSettingsPage({ searchParams }: { searchParams
         </div>
       )}
 
-      <div className="card flush">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Setting</th>
-                <th>Value</th>
-                <th>Source</th>
-                <th>Change</th>
-              </tr>
-            </thead>
-            <tbody>
-              {settings.map((s) => (
-                <tr key={s.key}>
-                  <td>
-                    <div className="source-name">{s.label}</div>
-                    <div className="source-meta">
-                      {s.key} · {s.envVar}
-                    </div>
-                  </td>
-                  <td className="wrap">
-                    {s.type === 'secret' ? (
-                      <Pill tone={s.isSet && !s.error ? 'ok' : 'muted'}>{s.isSet ? 'set' : 'not set'}</Pill>
-                    ) : (
-                      <code>{String(s.value ?? '')}</code>
-                    )}
-                    {s.error && (
-                      <div className="tone-bad small" role="note">
-                        invalid: {s.error}
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <Pill tone={s.source === 'environment' ? 'info' : 'muted'}>{SOURCE_LABEL[s.source]}</Pill>
-                  </td>
-                  <td>
-                    <SettingForm setting={s} canEdit={!s.ownerOnly || atLeast(access.role, 'owner')} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div className="card flush" role="list" aria-label="Settings">
+        {settings.map((s) => (
+          <div className="setting-row" role="listitem" key={s.key}>
+            <div>
+              <div className="source-name">{s.label}</div>
+              <div className="source-meta">
+                {s.key} · {s.envVar}
+              </div>
+              <div className="muted small">{s.description}</div>
+            </div>
+            <div className="setting-value">
+              {s.type === 'secret' ? (
+                <Pill tone={s.isSet && !s.error ? 'ok' : 'muted'}>{s.isSet ? 'set' : 'not set'}</Pill>
+              ) : (
+                <code>{String(s.value ?? '')}</code>
+              )}{' '}
+              <Pill tone={s.source === 'environment' ? 'info' : 'muted'}>{SOURCE_LABEL[s.source]}</Pill>
+              {s.error && (
+                <div className="tone-bad small" role="note">
+                  invalid: {s.error}
+                </div>
+              )}
+            </div>
+            <SettingForm setting={s} canEdit={!s.ownerOnly || atLeast(access.role, 'owner')} />
+          </div>
+        ))}
       </div>
     </>
   )

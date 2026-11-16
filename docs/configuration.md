@@ -1,31 +1,94 @@
 # Configuration reference
 
-Everything is configured through environment variables. `.env.example` lists them with
-defaults; sign-in and access settings are explained in [authentication.md](authentication.md).
+Three environment variables are enough to start: `DATABASE_URL`, `APP_URL` and
+`APP_SECRET`. With only those, the app serves its setup wizard (see
+[authentication.md](authentication.md#first-run-the-setup-wizard)), and everything else can be
+configured in the browser as it becomes available in 2.0. Every 1.1.0 variable keeps working
+exactly as before.
+
+## How a setting gets its value
+
+Settings that can be changed in the panel (**Admin → Settings**) resolve to exactly one value:
+
+1. the environment variable, if it is set — the panel then shows the setting as
+   **managed by environment** and does not let you change it there;
+2. otherwise the value saved in the panel;
+3. otherwise the default.
+
+So an existing deployment behaves as before, and a deployment managed from Git can keep every
+setting in its environment. A change saved in the panel reaches every running instance within
+`SETTINGS_CACHE_SECONDS` (default 5), without a restart.
+
+A value that is not valid — in the environment or in the database — is never silently replaced:
+it is logged once (without the value) and shown to administrators on the settings page. Until it
+is fixed the setting uses its default, or, for a secret, counts as not set.
+
+| Setting (panel) | Environment variable | Default | Who may change it |
+|---|---|---|---|
+| Application name | `APP_NAME` | `DMARCscope` | admins |
+| Ingest staleness warning (hours) | `INGEST_STALE_HOURS` | `36` | admins |
+| Session length (hours) | `SESSION_MAX_AGE_HOURS` | `12` | owner |
+| Machine endpoint token (secret) | `CRON_SECRET` | — (endpoints closed) | owner |
+
+More settings move into the panel in later 2.0 milestones (single sign-on, the reports mailbox,
+monitored domains, alerting).
+
+### Secrets in the database
+
+Secrets saved in the panel (and the owner's TOTP seed) are encrypted with AES-256-GCM under a key
+derived from `APP_SECRET`, one key per purpose. A saved secret is never sent back to the
+browser: the panel shows "set" or "not set" and takes a replacement. The ingest worker reads the
+same format (`ingestor/crypto.py`).
+
+**Rotating `APP_SECRET`:**
+
+1. Set `APP_SECRET` to a new value and `APP_SECRET_PREVIOUS` to the old one, and deploy. Values
+   written under the old secret still decrypt.
+2. Run `npm run secrets:reencrypt` (in the image: `node scripts/secrets-reencrypt.mjs`). It
+   re-encrypts everything under the new secret, in one transaction; if anything cannot be
+   decrypted it changes nothing and names the records. `--dry-run` only reports.
+3. Remove `APP_SECRET_PREVIOUS`.
+
+Rotating `APP_SECRET` also signs everyone out unless `SESSION_SECRET` is set (sessions are
+encrypted with `SESSION_SECRET` where that is set, otherwise with a key derived from
+`APP_SECRET`).
 
 ## Both components
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | — (required) | PostgreSQL connection string. Add `?sslmode=require` for TLS. |
+| `APP_SECRET` | — (required for the setup wizard, sign-in managed in the app and secrets saved in the panel) | At least 32 random characters (`openssl rand -base64 32`). Keep it in a secret manager; losing it makes the secrets saved in the panel unreadable. |
+| `APP_SECRET_PREVIOUS` | — | The previous `APP_SECRET`, while rotating (see above). |
 
 ## Web app
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `APP_URL` | `http://localhost:3000` outside production; required in production | Public URL. Used for sign-in redirects and to decide whether cookies are `Secure`. |
-| `APP_NAME` | `DMARCscope` | Name shown in the header and page titles. |
+| `APP_URL` | `http://localhost:3000` outside production; required in production | Public URL. Used for sign-in redirects, to decide whether cookies are `Secure`, and to check that form posts come from this site. |
+| `APP_NAME` | `DMARCscope` | Name shown in the header and page titles. Also a panel setting. |
 | `DATABASE_POOL_MAX` | `10` | Connections per web instance. |
 | `DATABASE_QUERY_TIMEOUT_MS` | `30000` | The web app abandons a query after this long and drops its connection. `0` disables. |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | — | Also sets PostgreSQL's `statement_timeout` on each connection. Transaction-mode poolers (PgBouncer) reject this; with one, run `ALTER ROLE <user> SET statement_timeout = '30s'` instead. |
-| `INGEST_STALE_HOURS` | `36` | With no completed ingest run for this long, the overview shows a warning and `/api/cron/status` answers 503. |
-| `AUTH_PROVIDER` | — (required) | `oidc`, `proxy-jwt`, `proxy-header` or `none`. |
-| `CRON_SECRET` | — | Bearer token for `/api/cron/*`; at least 16 characters. Endpoints are closed while unset. |
+| `INGEST_STALE_HOURS` | `36` | With no completed ingest run for this long, the overview shows a warning and `/api/cron/status` answers 503. Also a panel setting. |
+| `AUTH_PROVIDER` | — (sign-in managed in the app) | `oidc`, `proxy-jwt`, `proxy-header` or `none`; unset to manage sign-in in the app. See [authentication.md](authentication.md). |
+| `CRON_SECRET` | — | Bearer token for `/api/cron/*`; at least 16 characters. Endpoints are closed while neither this nor the panel setting is set. |
+| `SETUP_TOKEN` | — (generated) | Unlocks the setup wizard instead of the generated token printed in the log; at least 24 characters. |
+| `SETTINGS_CACHE_SECONDS` | `5` | How long each instance trusts what it read from the settings table before checking for changes (0–300). |
+| `CLIENT_IP_HEADER` | `x-forwarded-for` | Header the reverse proxy in front of the app puts the client's address in (for `x-forwarded-for`, the last entry is used). Used for the per-address sign-in limit and the audit log. The address is only as trustworthy as that proxy: Next.js passes on an `X-Forwarded-For` a client sent itself. |
 | `PORT`, `HOSTNAME` | `3000`, `0.0.0.0` (container) | Listen address. Docker Compose fixes these inside the container; use `WEB_BIND` / `WEB_PORT` (default `127.0.0.1`, `3000`) to choose where the port is published on the host. |
 
 Sign-in (`OIDC_*`, `SESSION_*`, `AUTH_PROXY_*`) and access lists (`ADMIN_*`, `ALLOWED_EMAILS`,
 `ALLOWED_EMAIL_DOMAINS`, `ALLOWED_GROUPS`, `AUTH_ALLOW_ANY_AUTHENTICATED`): see
 [authentication.md](authentication.md).
+
+### Commands (web image)
+
+```bash
+node scripts/migrate.mjs             # npm run db:migrate: apply database migrations
+node scripts/settings-import.mjs     # npm run settings:import: access lists → database (--dry-run)
+node scripts/secrets-reencrypt.mjs   # npm run secrets:reencrypt: after changing APP_SECRET (--dry-run)
+```
 
 ## Ingest worker
 

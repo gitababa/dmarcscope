@@ -192,6 +192,45 @@ flow, which are new attack surface, so it is the milestone to be slowest on.
    settings with their source (environment / database / default), see users, and read the
    audit log. Full management screens are milestone 2.
 
+### Decisions made while building milestone 1
+
+Clarifications of the decisions above, made where two of them pulled in different directions or
+the plan left a detail open. Each keeps the agreed behaviour.
+
+- **`AUTH_PROVIDER` unset means "sign-in managed in the app"** (owner password + TOTP now, OIDC
+  from the panel in milestone 3). The "only the setup wizard until an owner exists" rule applies
+  in this mode only. A 1.1.0 deployment has `AUTH_PROVIDER` set and no owner, so applying the rule
+  there would break "behaves exactly as before". On those deployments `/setup` is still available
+  (with the token) to create an owner, but nothing is locked behind it.
+- **Rule-admitted roles are re-evaluated on every request.** `users.role_source` (`assigned` /
+  `rule`, a column not in the original list) records whether a role was given to the person or
+  came from an access rule. The effective role is the higher of the assigned role and what the
+  rules give now, so removing someone from `ADMIN_EMAILS` (or deleting a rule) still removes the
+  access it gave, as in 1.1.0. A disabled row overrides everything.
+- **Further schema details:** `users.totp_last_step` (makes each TOTP code single-use);
+  `auth_throttle` (per-address counts, and per-address-typed counts for unknown accounts so a
+  lockout does not reveal whether the account exists); `config_version` as a separate one-row
+  table (bumped in the write's transaction, so a reader can never cache new data under an old
+  version); `setup_tokens.expires_at` is NULL for a `SETUP_TOKEN`-supplied token. The audit log
+  has no foreign key to `users` (so deleting a user never rewrites history) and a trigger refuses
+  `UPDATE` and `DELETE`.
+- **Envelope format:** version byte `0x01`, 4-byte key id (HKDF of `APP_SECRET`), 12-byte nonce,
+  ciphertext and tag, base64url. Keys per purpose (`setting`, `totp`) via HKDF; the AAD binds the
+  header, the purpose and the record (`cron.secret`, `user:42`). `lib/envelope.mjs` is plain
+  JavaScript so the command-line scripts can use it without a build step.
+- **Pre-sign-in forms are route handlers** (`/setup/*`, `/auth/password`,
+  `/auth/second-factor`) with plain HTML forms, an `Origin` check and 303 redirects, so they work
+  without JavaScript and can be driven by the end-to-end tests. Server actions remain the rule for
+  signed-in mutations.
+- **Registered settings in milestone 1** are only those something reads through the store:
+  `app.name`, `ingest.stale_hours`, `session.max_age_hours`, `cron.secret` (owner-only, secret).
+  Registering a setting nothing reads would show a control that does nothing.
+- **Client address** for per-address limits and the audit log comes from `CLIENT_IP_HEADER`
+  (default: last `X-Forwarded-For` entry), because Next.js keeps a client-sent `X-Forwarded-For`.
+  Per-account lockout does not depend on it.
+- **QR code:** `qrcode-generator` (MIT, no dependencies; checked upstream) renders the TOTP
+  enrolment code server-side as an SVG path.
+
 ### Done when
 
 - [ ] A fresh database plus the three required variables leads to `/setup`, and completing

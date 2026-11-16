@@ -38,6 +38,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   // Once there is an owner, setup is gone for good.
   if (await ownerExists(db)) return notFoundResponse()
 
+  // The owner's TOTP seed is stored encrypted under APP_SECRET.
+  if ((process.env.APP_SECRET || '').length < 32) return seeOther('/setup?error=app_secret')
+
   const ip = clientIp(req.headers)
   const actor = { userId: null, email: null, ip }
   const stateCookie = purposeCookieName('setup')
@@ -95,10 +98,13 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       email = identity.email
     }
     const name = fields.name.trim().replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200) || null
-    if (!EMAIL.test(email) || email.length > 254) return back('email')
+    // On a mistake, keep what was typed (never the password) for the form.
+    const retry = (error: string) =>
+      withState(back(error), { step: 'account', token: state.token, draft: { email: email.slice(0, 254), name: name ?? '' } })
+    if (!EMAIL.test(email) || email.length > 254) return retry('email')
     const problem = passwordProblem(fields.password, email)
-    if (problem) return back(`password_${problemCode(problem)}`)
-    if (fields.password !== fields.password_confirm) return back('password_mismatch')
+    if (problem) return retry(`password_${problemCode(problem)}`)
+    if (fields.password !== fields.password_confirm) return retry('password_mismatch')
 
     await recordAudit(db, { action: 'setup_account_entered', actor: { ...actor, email }, detail: {} })
     return withState(back(), {

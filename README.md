@@ -69,9 +69,10 @@ anyone else can reach it.)
    `p=none` only monitors. If the mailbox is on a different domain than the one being
    monitored, the mailbox's domain must also publish
    `<monitored-domain>._report._dmarc.<mailbox-domain>  TXT  "v=DMARC1"`.
-3. **Deploy** the web app, the database and the scheduled ingest job —
-   see [docs/deployment.md](docs/deployment.md) (Docker Compose, Kubernetes, Google Cloud Run,
-   Vercel).
+3. **Deploy** the web app, the database and the scheduled ingest job. `DATABASE_URL`, `APP_URL`
+   and `APP_SECRET` are enough to start: the app then serves a setup wizard that creates the owner
+   account — see [docs/deployment.md](docs/deployment.md) (Docker Compose, Kubernetes, Google
+   Cloud Run, Vercel) and the deployment guide's upgrade notes when coming from 1.1.
 4. **Choose how people sign in** — see [docs/authentication.md](docs/authentication.md).
 5. **Configure** the mailbox, retention and access lists —
    see [docs/configuration.md](docs/configuration.md).

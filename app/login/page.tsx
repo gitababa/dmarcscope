@@ -64,6 +64,11 @@ export default async function LoginPage({
           </div>
         )}
         {signedOut && !error && <div className="notice ok">You have been signed out.</div>}
+        {passwordForm && step === 'code' && !mfa && !error && (
+          <div className="notice warn" role="status">
+            That sign-in attempt expired. Enter your email address and password again.
+          </div>
+        )}
 
         {!passwordForm && (
           <>
@@ -113,11 +118,6 @@ export default async function LoginPage({
         {passwordForm && provider === 'oidc' && (
           <div className="auth-alt">
             <Link href={returnTo === '/' ? '/login' : `/login?returnTo=${encodeURIComponent(returnTo)}`}>Back to single sign-on</Link>
-          </div>
-        )}
-        {passwordForm && step === 'code' && !mfa && !error && (
-          <div className="notice warn" role="status">
-            That sign-in attempt expired. Enter your email address and password again.
           </div>
         )}
       </div>

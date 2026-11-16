@@ -853,6 +853,16 @@ details[open] > summary {
   .brand-name {
     display: none;
   }
+  /* The Admin tab already says who may administer. */
+  .userbox .pill {
+    display: none;
+  }
+  .topbar-inner {
+    gap: 0.6rem;
+  }
+  .nav a {
+    padding: 0 0.4rem;
+  }
   .page-head h1 {
     font-size: 1.3rem;
   }
@@ -915,11 +925,18 @@ select:focus-visible {
 }
 .steps {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 0.4rem;
+  gap: 0.2rem 0.4rem;
   margin: 0.2rem 0 1rem;
   font-size: 0.76rem;
   color: var(--text-muted);
+}
+.steps span + span::before {
+  content: '·';
+  margin-right: 0.4rem;
+  color: var(--text-muted);
+  font-weight: 400;
 }
 .steps span[aria-current='step'] {
   color: var(--accent);
@@ -1006,4 +1023,45 @@ select:focus-visible {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 0.5rem 1.2rem;
+  align-items: center;
+  padding: 0.85rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child {
+  border-bottom: none;
+}
+.setting-value {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.audit-row {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 0.3rem 1rem;
+  padding: 0.65rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.86rem;
+  align-items: baseline;
+}
+.audit-row:last-child {
+  border-bottom: none;
+}
+.audit-who,
+.audit-what,
+.audit-detail {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .audit-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

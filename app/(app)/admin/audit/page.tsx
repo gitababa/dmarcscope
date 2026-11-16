@@ -2,7 +2,6 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { AUDIT_PAGE, listAudit } from '@/lib/admin'
 import { requirePageRole } from '@/lib/auth/server'
-import { fmtDate } from '@/lib/format'
 import { AdminNav } from '../nav'
 
 export const dynamic = 'force-dynamic'
@@ -33,42 +32,24 @@ export default async function AdminAuditPage({ searchParams }: { searchParams: P
       </div>
       <AdminNav current="/admin/audit" />
       <div className="card flush">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Who</th>
-                <th>What</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="muted">
-                    Nothing recorded yet.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>
-                    {fmtDate(r.at)} {new Date(r.at).toISOString().slice(11, 19)}
-                  </td>
-                  <td className="wrap">
-                    {r.actor_email ?? <span className="muted">system</span>}
-                    {r.ip && <div className="source-meta">{r.ip}</div>}
-                  </td>
-                  <td>
-                    <code>{r.action}</code>
-                    {r.target && <div className="source-meta">{r.target}</div>}
-                  </td>
-                  <td className="wrap source-meta">{describe(r.detail)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div role="list" aria-label="Audit log">
+          {rows.length === 0 && <div className="audit-row muted">Nothing recorded yet.</div>}
+          {rows.map((r) => (
+            <div className="audit-row" role="listitem" key={r.id}>
+              <div className="muted small audit-when">
+                {new Date(r.at).toISOString().replace('T', ' ').slice(0, 19)} UTC
+              </div>
+              <div className="audit-what">
+                <code>{r.action}</code>
+                {r.target && <span className="source-meta"> {r.target}</span>}
+              </div>
+              <div className="audit-who">
+                {r.actor_email ?? <span className="muted">{r.ip ? 'not signed in' : 'system'}</span>}
+                {r.ip && <span className="source-meta"> · {r.ip}</span>}
+              </div>
+              <div className="source-meta audit-detail">{describe(r.detail)}</div>
+            </div>
+          ))}
         </div>
         {rows.length === AUDIT_PAGE && last && (
           <div className="card-foot">

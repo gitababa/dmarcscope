@@ -9,7 +9,8 @@ export const SETUP_TTL_SECONDS = 30 * 60
 export const RECOVERY_TTL_SECONDS = 15 * 60
 
 export type SetupState =
-  | { step: 'account'; token: TokenRef }
+  // draft: what was typed before a validation error, to fill the form again
+  | { step: 'account'; token: TokenRef; draft?: { email: string; name: string } }
   | { step: 'totp'; token: TokenRef; email: string; name: string | null; passwordHash: string; totpSecret: string }
 
 function isTokenRef(v: unknown): v is TokenRef {
@@ -25,7 +26,11 @@ export async function sealSetupState(state: SetupState, env: Env = process.env):
 export async function unsealSetupState(token: string | undefined, env: Env = process.env): Promise<SetupState | null> {
   const p = await unseal(token, 'setup', env)
   if (!p || !isTokenRef(p.token)) return null
-  if (p.step === 'account') return { step: 'account', token: p.token }
+  if (p.step === 'account') {
+    const d = p.draft as Record<string, unknown> | undefined
+    const draft = d && typeof d.email === 'string' && typeof d.name === 'string' ? { email: d.email, name: d.name } : undefined
+    return { step: 'account', token: p.token, ...(draft ? { draft } : {}) }
+  }
   if (
     p.step === 'totp' &&
     typeof p.email === 'string' &&
