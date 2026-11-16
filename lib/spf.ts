@@ -145,6 +145,9 @@ export async function expandSpf(
     if (via.length === 0) result.has_spf = true
 
     const terms = spf.split(/\s+/).slice(1)
+    // redirect= only applies when nothing else matched, which cannot happen
+    // in a record that has an "all" mechanism (RFC 7208 §6.1).
+    const hasAll = terms.some((t) => /^[+\-~?]?all$/i.test(t))
     for (const rawTerm of terms) {
       // Strip qualifiers; a "-"/"~"/"?" prefixed mechanism still declares the
       // network — we only care about attribution, not pass/fail semantics.
@@ -173,6 +176,7 @@ export async function expandSpf(
         }
         await walk(term.slice(8), [...via, term], path)
       } else if (term.startsWith('redirect=')) {
+        if (hasAll) continue
         if (++result.lookups > MAX_LOOKUPS) {
           result.notes.push(`Lookup limit (${MAX_LOOKUPS}) reached; expansion truncated at ${term}.`)
           return
@@ -198,7 +202,9 @@ export async function expandSpf(
         } catch (e) {
           if (!isNoRecord(e)) failed(`MX ${hostPart}`)
         }
-      } else if (term.startsWith('exists:') || term.startsWith('ptr')) {
+      } else if (term.startsWith('exists:') || term === 'ptr' || term.startsWith('ptr:')) {
+        // Not expanded, but a receiver still spends one of its 10 lookups on it.
+        result.lookups++
         result.notes.push(`Mechanism "${term}" cannot be expanded to IP ranges; ignored for attribution.`)
       }
       // "all" and modifiers: nothing to expand

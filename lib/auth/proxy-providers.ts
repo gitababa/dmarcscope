@@ -19,6 +19,9 @@ import type { Identity } from './types'
 
 type HeaderBag = { get(name: string): string | null }
 
+// One address: something@something, no whitespace, commas or second "@".
+const EMAIL_SHAPE = /^[^@\s,]+@[^@\s,]+$/
+
 // ---------- proxy-jwt ----------
 
 type JwtProxyConfig = {
@@ -95,9 +98,11 @@ export async function identityFromProxyJwt(headers: HeaderBag, env: Env = proces
       // shared secret or with alg=none.
       algorithms: ['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'PS256', 'PS384', 'PS512', 'EdDSA'],
       clockTolerance: 30,
+      // An assertion with no expiry would be valid forever if it leaked.
+      requiredClaims: ['exp'],
     })
     const email = payload[cfg.emailClaim]
-    if (typeof email !== 'string' || !email.includes('@')) return null
+    if (typeof email !== 'string' || !EMAIL_SHAPE.test(email)) return null
     const rawGroups = payload[cfg.groupsClaim]
     const groups = Array.isArray(rawGroups) ? rawGroups.filter((g): g is string => typeof g === 'string') : []
     return {
@@ -135,7 +140,7 @@ export function identityFromProxyHeader(headers: HeaderBag, env: Env = process.e
   const nameHeader = (env.AUTH_PROXY_NAME_HEADER?.trim() || 'x-forwarded-preferred-username').toLowerCase()
 
   const email = headers.get(emailHeader)?.trim().toLowerCase()
-  if (!email || !/^[^@\s,]+@[^@\s,]+$/.test(email)) return null
+  if (!email || !EMAIL_SHAPE.test(email)) return null
   const groups = (headers.get(groupsHeader) || '')
     .split(',')
     .map((g) => g.trim())

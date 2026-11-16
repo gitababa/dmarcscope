@@ -8,10 +8,11 @@ own timeout for every dead IP.
 
 from __future__ import annotations
 
+import ipaddress
+import queue
 import socket
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import psycopg
 from parsedmarc.utils import get_base_domain
@@ -24,9 +25,20 @@ UNRESOLVED = "unresolved"
 
 
 def _lookup(ip: str) -> tuple[str, str | None]:
+    """Forward-confirmed reverse DNS: the PTR name, but only if that name
+    resolves back to the same address. Whoever controls an IP's reverse zone
+    can make its PTR say anything (mail.google.com, say); the forward lookup
+    is answered by the named domain itself."""
     try:
-        return ip, socket.gethostbyaddr(ip)[0].rstrip(".").lower() or None
-    except (OSError, UnicodeError):
+        host = socket.gethostbyaddr(ip)[0].rstrip(".").lower()
+        if not host:
+            return ip, None
+        want = ipaddress.ip_address(ip)
+        for info in socket.getaddrinfo(host, None):
+            if ipaddress.ip_address(info[4][0].split("%")[0]) == want:
+                return ip, host
+        return ip, None
+    except (OSError, UnicodeError, ValueError):
         return ip, None
 
 
@@ -61,28 +73,49 @@ def enrich_ip_metadata(conn: psycopg.Connection, budget_seconds: float) -> int:
     if not ips:
         return 0
 
+    # Daemon threads rather than a ThreadPoolExecutor: gethostbyaddr cannot
+    # be cancelled, and the interpreter waits for executor threads at exit, so
+    # one lookup stuck in the resolver would hold the whole job open.
+    todo: queue.SimpleQueue = queue.SimpleQueue()
+    done: queue.SimpleQueue = queue.SimpleQueue()
+    for ip in ips:
+        todo.put(ip)
+
+    def work() -> None:
+        while True:
+            try:
+                ip = todo.get_nowait()
+            except queue.Empty:
+                return
+            done.put(_lookup(ip))
+
+    for i in range(min(WORKERS, len(ips))):
+        threading.Thread(target=work, name=f"rdns-{i}", daemon=True).start()
+
     resolved = 0
-    pool = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="rdns")
-    futures = [pool.submit(_lookup, ip) for ip in ips]
-    try:
-        for fut in as_completed(futures, timeout=budget_seconds):
-            ip, host = fut.result()
-            with conn.cursor() as cur:
-                if host:
-                    cur.execute(
-                        "UPDATE ip_metadata SET reverse_dns = %s, base_domain = COALESCE(base_domain, %s) WHERE ip = %s",
-                        (host[:255], _base_domain(host)[:255], ip),
-                    )
-                    resolved += 1
-                else:
-                    cur.execute(
-                        "UPDATE ip_metadata SET reverse_dns = COALESCE(reverse_dns, %s) WHERE ip = %s",
-                        (UNRESOLVED, ip),
-                    )
-    except FuturesTimeoutError:
-        pass  # out of time; the rest are picked up by the next run
-    finally:
-        # Don't wait for lookups still stuck in the resolver.
-        pool.shutdown(wait=False, cancel_futures=True)
+    deadline = time.monotonic() + budget_seconds
+    for _ in ips:
+        try:
+            ip, host = done.get(timeout=max(0.0, deadline - time.monotonic()))
+        except queue.Empty:
+            # Out of time. Stop handing out work; the rest is picked up next run.
+            while True:
+                try:
+                    todo.get_nowait()
+                except queue.Empty:
+                    break
+            break
+        with conn.cursor() as cur:
+            if host:
+                cur.execute(
+                    "UPDATE ip_metadata SET reverse_dns = %s, base_domain = COALESCE(base_domain, %s) WHERE ip = %s",
+                    (host[:255], _base_domain(host)[:255], ip),
+                )
+                resolved += 1
+            else:
+                cur.execute(
+                    "UPDATE ip_metadata SET reverse_dns = COALESCE(reverse_dns, %s) WHERE ip = %s",
+                    (UNRESOLVED, ip),
+                )
     conn.commit()
     return resolved

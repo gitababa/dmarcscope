@@ -37,5 +37,7 @@ CI runs the same checks, plus the end-to-end sign-in tests and container builds.
 - Behaviour changes need a test. Security-relevant code (anything under `lib/auth/`, `proxy.ts`,
   the `/api` routes) needs one that covers the rejection path, not just the happy path.
 - The UI must keep working with no third-party network requests.
+- User-visible changes get a line in `CHANGELOG.md`. The version lives in `package.json` and
+  `ingestor/__init__.py`; a test checks that they agree.
 
 By contributing you agree that your contributions are licensed under the Apache License 2.0.

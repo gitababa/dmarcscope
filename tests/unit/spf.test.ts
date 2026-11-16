@@ -171,6 +171,14 @@ describe('expandSpf', () => {
     expect(r.notes.join(' ')).toMatch(/Time budget/)
   })
 
+  it('ignores redirect= when the record has an "all", and counts ptr / exists as lookups', async () => {
+    records['both.test'] = { txt: ['v=spf1 ip4:192.0.2.1 exists:%{i}.bl.test ptr ptr:other.test -all redirect=_spf.both.test'] }
+    records['_spf.both.test'] = { txt: ['v=spf1 ip4:203.0.113.0/24 -all'] }
+    const r = await expandSpf('both.test')
+    expect(r.networks).toEqual([{ cidr: '192.0.2.1', via: 'top-level' }])
+    expect(r.lookups).toBe(3)
+  })
+
   it('follows redirect=', async () => {
     records['r.test'] = { txt: ['v=spf1 redirect=_spf.r.test'] }
     records['_spf.r.test'] = { txt: ['v=spf1 ip4:192.0.2.99 -all'] }

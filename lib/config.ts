@@ -74,6 +74,14 @@ export function safeEqual(a: string, b: string): boolean {
 // endpoints. Fails closed when the secret is not configured.
 export function hasValidBearer(authorization: string | null, env: Env = process.env): boolean {
   const secret = env.CRON_SECRET
-  if (!secret || secret.length < 16 || !authorization) return false
+  if (secret && secret.length < 16) {
+    // Otherwise indistinguishable from a wrong token: every call is a 401.
+    if (!warnedShortSecret) console.error('[config] CRON_SECRET is shorter than 16 characters; /api/cron/* rejects every request until it is replaced.')
+    warnedShortSecret = true
+    return false
+  }
+  if (!secret || !authorization) return false
   return safeEqual(authorization, `Bearer ${secret}`)
 }
+
+let warnedShortSecret = false

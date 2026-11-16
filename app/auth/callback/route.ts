@@ -19,9 +19,12 @@ export const dynamic = 'force-dynamic'
 // the session cookie.
 export async function GET(req: NextRequest) {
   const base = appUrl()
+  // Expire the login-state cookie with the same attributes it was set with:
+  // a bare delete drops Secure, and browsers ignore that for a __Host- cookie.
+  const clearLoginCookie = (res: NextResponse) => res.cookies.set(loginCookieName(), '', cookieOptions(0))
   const fail = (code: string) => {
     const res = NextResponse.redirect(new URL(`/login?error=${code}`, base))
-    res.cookies.delete(loginCookieName())
+    clearLoginCookie(res)
     res.headers.set('cache-control', 'no-store')
     return res
   }
@@ -41,7 +44,7 @@ export async function GET(req: NextRequest) {
     // an admin adds them (roles are evaluated per request, not at sign-in).
     const res = NextResponse.redirect(new URL(role ? login.returnTo : '/denied', base))
     res.cookies.set(sessionCookieName(), await sealSession(identity), cookieOptions(sessionTtlSeconds()))
-    res.cookies.delete(loginCookieName())
+    clearLoginCookie(res)
     res.headers.set('cache-control', 'no-store')
     return res
   } catch (err) {

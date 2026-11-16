@@ -127,3 +127,57 @@ def test_a_crashed_run_does_not_block_forever(db_settings):
         assert store.start_run(conn, stale_after_seconds=900) is not None
     finally:
         conn.close()
+
+
+def test_only_one_of_two_simultaneous_starts_wins(db_settings):
+    import threading
+
+    barrier = threading.Barrier(8)
+    results = []
+
+    def start():
+        conn = store.connect(db_settings)
+        try:
+            barrier.wait(10)
+            results.append(store.start_run(conn, stale_after_seconds=900))
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=start) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert len(results) == 8 and len([r for r in results if r is not None]) == 1
+    assert _rows(db_settings, "SELECT count(*) FROM ingest_runs") == [(1,)]
+
+
+def test_what_one_report_can_write_is_bounded(db_settings, monkeypatch):
+    monkeypatch.setattr(store, "MAX_RECORDS_PER_REPORT", 3)
+    report = parse_file(report_xml())["report"]
+    record = report["records"][0]
+    record["auth_results"]["dkim"] = [
+        {"domain": "d" * 5000, "selector": "s", "result": "pass", "nested": {"a": ["b"] * 1000}} for _ in range(500)
+    ]
+    report["records"] = [dict(record, source={**record["source"], "ip_address": f"192.0.2.{i}"}) for i in range(10)]
+    report["policy_published"] = {**report["policy_published"], "junk": "j" * 100_000, "deep": {"x": 1}, **{f"k{i}": i for i in range(200)}}
+
+    conn = store.connect(db_settings)
+    try:
+        assert store.insert_aggregate_report(conn, report, db_settings) == store.STORED
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows, results, longest, valid = _rows(
+        db_settings,
+        "SELECT count(*), max(jsonb_array_length(dkim_results)), max(length(dkim_results->0->>'domain')), bool_and(dkim_sig_valid) FROM records",
+    )[0]
+    assert (rows, results, longest, valid) == (3, store.MAX_AUTH_RESULTS, 255, True)
+    assert _rows(db_settings, "SELECT bool_or(dkim_results->0 ? 'nested') FROM records") == [(False,)]
+    keys, policy, junk = _rows(
+        db_settings,
+        "SELECT (SELECT count(*) FROM jsonb_object_keys(policy_published)), policy_published->>'p', length(policy_published->>'junk') FROM reports",
+    )[0]
+    assert keys <= store.MAX_JSON_KEYS and policy == "none" and junk == 255
+    assert _rows(db_settings, "SELECT policy_published ? 'deep' FROM reports") == [(False,)]

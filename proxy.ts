@@ -6,7 +6,7 @@
 // 2. A per-request Content-Security-Policy with a script nonce.
 
 import { NextResponse, type NextRequest } from 'next/server'
-import { ConfigError, envBool } from '@/lib/config'
+import { ConfigError, appUrl, envBool } from '@/lib/config'
 import { authProvider, authenticate } from '@/lib/auth'
 
 // Reachable without a session:
@@ -49,35 +49,41 @@ export async function proxy(req: NextRequest) {
   const path = req.nextUrl.pathname
 
   if (!isPublicPath(path)) {
-    let result
+    const noStore = { 'cache-control': 'no-store' }
     try {
-      result = await authenticate({ headers: req.headers, cookie: (name) => req.cookies.get(name)?.value })
-    } catch (err) {
-      if (err instanceof ConfigError) {
-        console.error(`[config] ${err.message}`)
-        return new NextResponse(`Server configuration error: ${err.message}\n`, {
-          status: 500,
-          headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-        })
-      }
-      throw err
-    }
+      const result = await authenticate({ headers: req.headers, cookie: (name) => req.cookies.get(name)?.value })
 
-    if (result.status !== 'ok') {
+      if (result.status !== 'ok') {
+        if (path.startsWith('/api/')) {
+          const status = result.status === 'forbidden' ? 403 : 401
+          return NextResponse.json({ ok: false, error: result.status }, { status, headers: noStore })
+        }
+        // Redirect to the configured public URL: behind a reverse proxy the
+        // request URL can carry the container's own host and port.
+        const url = new URL('/denied', process.env.APP_URL?.trim() ? appUrl() : req.nextUrl.origin)
+        if (result.status === 'unauthenticated' && authProvider() === 'oidc') {
+          url.pathname = '/login'
+          const returnTo = path + req.nextUrl.search
+          if (returnTo !== '/') url.searchParams.set('returnTo', returnTo)
+        }
+        return NextResponse.redirect(url)
+      }
+    } catch (err) {
+      if (!(err instanceof ConfigError)) throw err
+      // The detail is for the operator (server log). Whoever is asking is not
+      // signed in, so in production they are only told that it is broken.
+      console.error(`[config] ${err.message}`)
+      const message =
+        process.env.NODE_ENV === 'production'
+          ? 'Server configuration error. The details are in the server log.'
+          : `Server configuration error: ${err.message}`
       if (path.startsWith('/api/')) {
-        const status = result.status === 'forbidden' ? 403 : 401
-        return NextResponse.json({ ok: false, error: result.status }, { status, headers: { 'cache-control': 'no-store' } })
+        return NextResponse.json({ ok: false, error: 'server_configuration' }, { status: 500, headers: noStore })
       }
-      const url = req.nextUrl.clone()
-      url.search = ''
-      if (result.status === 'unauthenticated' && authProvider() === 'oidc') {
-        url.pathname = '/login'
-        const returnTo = path + req.nextUrl.search
-        if (returnTo !== '/') url.searchParams.set('returnTo', returnTo)
-      } else {
-        url.pathname = '/denied'
-      }
-      return NextResponse.redirect(url)
+      return new NextResponse(`${message}\n`, {
+        status: 500,
+        headers: { 'content-type': 'text/plain; charset=utf-8', ...noStore },
+      })
     }
   }
 

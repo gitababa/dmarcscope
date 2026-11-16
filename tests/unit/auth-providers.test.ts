@@ -21,6 +21,9 @@ describe('authProvider', () => {
     expect(authProvider({ AUTH_PROVIDER: 'none' })).toBe('none')
     expect(() => authProvider({ AUTH_PROVIDER: 'none', NODE_ENV: 'production' })).toThrow(/refused in production/)
     expect(authProvider({ AUTH_PROVIDER: 'none', NODE_ENV: 'production', AUTH_ALLOW_INSECURE_NONE: 'true' })).toBe('none')
+    // same spellings as every other boolean setting
+    expect(authProvider({ AUTH_PROVIDER: 'none', NODE_ENV: 'production', AUTH_ALLOW_INSECURE_NONE: 'TRUE' })).toBe('none')
+    expect(() => authProvider({ AUTH_PROVIDER: 'none', NODE_ENV: 'production', AUTH_ALLOW_INSECURE_NONE: 'false' })).toThrow(/refused/)
   })
 })
 
@@ -104,13 +107,15 @@ describe('proxy-jwt', () => {
     jwksUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/jwks`
 
     const maker = (key: CryptoKey) => (claims: Record<string, unknown>, opts: { iss?: string; aud?: string; exp?: string } = {}) =>
-      new SignJWT(claims)
+    {
+      const jwt = new SignJWT(claims)
         .setProtectedHeader({ alg: 'ES256', kid: 'k1' })
         .setIssuer(opts.iss ?? 'https://proxy.example')
         .setAudience(opts.aud ?? 'dmarcscope-app')
         .setIssuedAt()
-        .setExpirationTime(opts.exp ?? '5m')
-        .sign(key)
+      if (opts.exp !== 'never') jwt.setExpirationTime(opts.exp ?? '5m')
+      return jwt.sign(key)
+    }
     sign = maker(good.privateKey as CryptoKey)
     signWithOtherKey = maker(other.privateKey as CryptoKey)
   })
@@ -141,6 +146,11 @@ describe('proxy-jwt', () => {
       await sign({ email: 'a@example.com' }, { iss: 'https://evil.example' }),
       await signWithOtherKey({ email: 'a@example.com' }),
       await sign({ email: 'a@example.com' }, { exp: '-10m' }),
+      // no expiry at all, and things that only resemble one address
+      await sign({ email: 'a@example.com' }, { exp: 'never' }),
+      await sign({ email: 'a@example.com, admin@example.com' }),
+      await sign({ email: 'a@example.com@evil.test' }),
+      await sign({ email: ' a@example.com' }),
       // alg=none
       `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(
         JSON.stringify({ email: 'a@example.com', iss: 'https://proxy.example', aud: 'dmarcscope-app' })

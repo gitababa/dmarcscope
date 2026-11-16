@@ -53,7 +53,12 @@ async function handle(req: NextRequest) {
   if (one && summary[one] === 'unknown_domain') {
     return NextResponse.json({ ok: false, error: 'unknown domain' }, { status: 404 })
   }
-  return NextResponse.json({ ok: true, checked: Object.keys(summary).length, results: summary })
+  // "Every domain failed" is a failure of the job (database or resolver
+  // down), and a scheduler should see it as one.
+  const outcomes = Object.values(summary)
+  const failed = outcomes.filter((o) => o === 'error').length
+  const ok = outcomes.length === 0 || failed < outcomes.length
+  return NextResponse.json({ ok, checked: outcomes.length, failed, results: summary }, { status: ok ? 200 : 500 })
 }
 
 export const GET = handle

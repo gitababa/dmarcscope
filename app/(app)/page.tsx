@@ -8,6 +8,7 @@ import {
   getIngestHealth,
   getVolumeTimeseries,
 } from '@/lib/queries'
+import { requireViewer } from '@/lib/auth/server'
 import { identifySource } from '@/lib/senders'
 import { fmtInt, fmtDate, pct, relTime, parseRange, rangeParam, rangeLabel, policyTone } from '@/lib/format'
 import { VolumeChart } from '@/components/VolumeChart'
@@ -21,6 +22,7 @@ export default async function OverviewPage({
 }: {
   searchParams: Promise<{ range?: string }>
 }) {
+  await requireViewer() // each page checks for itself; it does not rely on the layout or the proxy
   const { range: rawRange } = await searchParams
   const days = parseRange(rawRange)
 

@@ -16,6 +16,15 @@ FILTERED = "filtered"
 
 _INT4_MAX = 2_147_483_647
 
+# Bounds on what one report may write. A report is an email from a stranger:
+# without these, one message could add millions of rows or megabytes of JSON.
+MAX_RECORDS_PER_REPORT = 50_000
+MAX_AUTH_RESULTS = 20  # DKIM / SPF results kept per record
+MAX_JSON_KEYS = 24
+
+# Arbitrary constant identifying this application's "start an ingest run" lock.
+_RUN_LOCK_KEY = 4117230902
+
 
 def connect(settings: Settings) -> psycopg.Connection:
     # Nothing here depends on session state (every timestamp is passed with an
@@ -38,6 +47,26 @@ def _text(value: Any, limit: int = 1000) -> str | None:
         return None
     # NUL bytes are not storable in PostgreSQL text.
     return str(value).replace("\x00", "")[:limit] or None
+
+
+def _json_object(value: Any) -> dict:
+    """A flat, size-bounded copy of a parsed JSON object: scalar values only,
+    strings cut to 255 characters, at most MAX_JSON_KEYS keys."""
+    out: dict = {}
+    if not isinstance(value, dict):
+        return out
+    for key, val in list(value.items())[:MAX_JSON_KEYS]:
+        if isinstance(val, (bool, int, float)) or val is None:
+            out[str(key)[:64]] = val
+        elif isinstance(val, str):
+            out[str(key)[:64]] = val.replace("\x00", "")[:255]
+    return out
+
+
+def _json_list(value: Any) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    return [_json_object(item) for item in value[:MAX_AUTH_RESULTS] if isinstance(item, dict)]
 
 
 def _bool_alignment(alignment: dict, policy_eval: dict, key: str) -> bool:
@@ -91,7 +120,7 @@ def insert_aggregate_report(conn: psycopg.Connection, report: dict, settings: Se
             ON CONFLICT (domain_id, org_name, report_id) DO NOTHING
             RETURNING id
             """,
-            (domain_id, org_name, _text(meta.get("org_email"), 320), report_id, begin, end, json.dumps(policy)),
+            (domain_id, org_name, _text(meta.get("org_email"), 320), report_id, begin, end, json.dumps(_json_object(policy))),
         )
         row = cur.fetchone()
         if row is None:
@@ -100,7 +129,7 @@ def insert_aggregate_report(conn: psycopg.Connection, report: dict, settings: Se
 
         record_rows = []
         ip_rows: dict[str, tuple] = {}
-        for r in report.get("records") or []:
+        for r in (report.get("records") or [])[:MAX_RECORDS_PER_REPORT]:
             source = r.get("source") or {}
             ip = str(source.get("ip_address") or "").split("/")[0].strip()
             if not ip:
@@ -133,8 +162,8 @@ def insert_aggregate_report(conn: psycopg.Connection, report: dict, settings: Se
                     _text(identifiers.get("header_from"), 255),
                     _text(identifiers.get("envelope_from"), 255),
                     _text(identifiers.get("envelope_to"), 255),
-                    json.dumps(auth.get("dkim") or []),
-                    json.dumps(auth.get("spf") or []),
+                    json.dumps(_json_list(auth.get("dkim"))),
+                    json.dumps(_json_list(auth.get("spf"))),
                     _parse_ts(r.get("interval_begin")) or begin,
                     _parse_ts(r.get("interval_end")) or end,
                 )
@@ -208,11 +237,13 @@ def start_run(conn: psycopg.Connection, stale_after_seconds: int) -> int | None:
     """Record the start of a run. Returns None if another run is in progress.
 
     A run counts as in progress if it has not finished and started less than
-    stale_after_seconds ago (older ones are assumed to have crashed). This is a
-    plain-SQL guard rather than an advisory lock so that it also works through
-    transaction-mode connection poolers.
+    stale_after_seconds ago (older ones are assumed to have crashed). The row
+    is the guard, so it holds for the whole run even through a transaction-mode
+    connection pooler; the advisory lock only makes "check, then insert" atomic
+    when two runs start at the same instant, and is released at commit.
     """
     with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_RUN_LOCK_KEY,))
         cur.execute(
             """
             INSERT INTO ingest_runs (started_at)

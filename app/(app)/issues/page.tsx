@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { CategoryPill, RangeSwitcher } from '@/components/ui'
+import { requireViewer } from '@/lib/auth/server'
 import { diagnoseSource } from '@/lib/diagnose'
 import { isValidDomainName } from '@/lib/dns-run'
 import { fmtDate, fmtInt, parseRange, pct, rangeLabel, rangeParam } from '@/lib/format'
@@ -18,6 +19,7 @@ export default async function IssuesPage({
 }: {
   searchParams: Promise<{ range?: string; domain?: string }>
 }) {
+  await requireViewer() // each page checks for itself; it does not rely on the layout or the proxy
   const { range: rawRange, domain: rawDomain } = await searchParams
   const days = parseRange(rawRange)
   const requested = (rawDomain || '').trim().toLowerCase()

@@ -236,12 +236,15 @@ export async function getDataExtent(): Promise<DataExtent> {
   }
 }
 
+// One bar per UTC day, by the day a record's reporting period began: reports
+// cover a UTC day, and a period ending at 23:59:59 or at midnight must land
+// in the same bar whatever time zone the database session uses.
 export async function getVolumeTimeseries(days = 7, domain?: string): Promise<TimeseriesPoint[]> {
   const since = cutoff(days)
   const rows = domain
     ? ((await sql`
         SELECT
-          date_trunc('day', r.period_end)::date::text AS day,
+          (r.period_start AT TIME ZONE 'UTC')::date::text AS day,
           SUM(r.message_count)::bigint AS total,
           SUM(CASE WHEN r.dmarc_aligned THEN r.message_count ELSE 0 END)::bigint AS passed
         FROM records r
@@ -253,7 +256,7 @@ export async function getVolumeTimeseries(days = 7, domain?: string): Promise<Ti
       `) as Array<Record<string, string | number>>)
     : ((await sql`
         SELECT
-          date_trunc('day', r.period_end)::date::text AS day,
+          (r.period_start AT TIME ZONE 'UTC')::date::text AS day,
           SUM(r.message_count)::bigint AS total,
           SUM(CASE WHEN r.dmarc_aligned THEN r.message_count ELSE 0 END)::bigint AS passed
         FROM records r

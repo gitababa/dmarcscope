@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import signal
 import sys
 
 from . import __version__
@@ -29,6 +30,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     # parsedmarc logs every parsed message at INFO.
     logging.getLogger("parsedmarc").setLevel(logging.DEBUG if args.verbose else logging.WARNING)
+
+    # Schedulers stop a job with SIGTERM (Kubernetes, Cloud Run, docker stop).
+    # Turn it into a normal exit so the run is closed and connections are
+    # released on the way out, instead of the row staying "in progress".
+    def _terminate(signum, frame):  # noqa: ARG001
+        raise SystemExit(143)
+
+    try:
+        signal.signal(signal.SIGTERM, _terminate)
+    except ValueError:
+        pass  # not the main thread (embedded use); nothing to install
 
     try:
         settings = load_settings()

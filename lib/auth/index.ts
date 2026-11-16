@@ -3,7 +3,7 @@
 // and again by the pages and actions themselves (lib/auth/server.ts), so a
 // misconfigured matcher can never expose data on its own.
 
-import { ConfigError, type Env } from '../config'
+import { ConfigError, envBool, type Env } from '../config'
 import { resolveRole } from './authz'
 import { identityFromProxyHeader, identityFromProxyJwt } from './proxy-providers'
 import { sessionCookieName, unsealSession } from './session'
@@ -21,7 +21,7 @@ export function authProvider(env: Env = process.env): AuthProviderName {
   if (!PROVIDERS.includes(raw as AuthProviderName)) {
     throw new ConfigError(`Unknown AUTH_PROVIDER "${raw}". Choose one of: ${PROVIDERS.join(', ')}.`)
   }
-  if (raw === 'none' && env.NODE_ENV === 'production' && env.AUTH_ALLOW_INSECURE_NONE !== 'true') {
+  if (raw === 'none' && env.NODE_ENV === 'production' && !envBool(env.AUTH_ALLOW_INSECURE_NONE)) {
     throw new ConfigError(
       'AUTH_PROVIDER=none disables sign-in and is refused in production. Configure a real provider, or set AUTH_ALLOW_INSECURE_NONE=true if access is enforced elsewhere.'
     )
