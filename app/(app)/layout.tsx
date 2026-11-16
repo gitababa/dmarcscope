@@ -2,16 +2,17 @@ import Link from 'next/link'
 import { signOutAction } from '@/app/actions'
 import { NavTabs, SubmitButton } from '@/components/client'
 import { Logo, Pill } from '@/components/ui'
-import { authProvider } from '@/lib/auth'
+import { authProvider, hasSignInPage } from '@/lib/auth'
+import { atLeast } from '@/lib/auth/roles'
 import { requireViewer } from '@/lib/auth/server'
-import { appName } from '@/lib/config'
+import { getAppName } from '@/lib/settings'
 
 // Every page under this layout needs a signed-in, authorized user. proxy.ts
 // already enforces that; requireViewer() is the second, independent check.
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const session = await requireViewer()
+  const { session, role } = await requireViewer()
   const provider = authProvider()
-  const name = appName()
+  const name = await getAppName()
 
   return (
     <>
@@ -21,7 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <Logo />
             <span className="brand-name">{name}</span>
           </Link>
-          <NavTabs />
+          <NavTabs admin={atLeast(role, 'admin')} />
           <div className="userbox">
             {provider !== 'none' && (
               <span className="email" title={session.identity.email}>
@@ -33,9 +34,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                 auth disabled
               </Pill>
             ) : (
-              session.role === 'admin' && <Pill tone="info">admin</Pill>
+              atLeast(role, 'admin') && <Pill tone="info">{role}</Pill>
             )}
-            {provider === 'oidc' && (
+            {hasSignInPage(provider) && (
               <form action={signOutAction}>
                 <SubmitButton className="btn btn-sm">Sign out</SubmitButton>
               </form>

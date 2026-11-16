@@ -19,15 +19,16 @@ export default async function IssuesPage({
 }: {
   searchParams: Promise<{ range?: string; domain?: string }>
 }) {
-  await requireViewer() // each page checks for itself; it does not rely on the layout or the proxy
+  // Each page checks for itself; it does not rely on the layout or the proxy.
+  const { domains: scope } = await requireViewer()
   const { range: rawRange, domain: rawDomain } = await searchParams
   const days = parseRange(rawRange)
   const requested = (rawDomain || '').trim().toLowerCase()
-  const domainNames = await getDomainNames()
+  const domainNames = await getDomainNames(scope)
   // Only filter by a domain that is actually tracked.
   const domain = isValidDomainName(requested) && domainNames.includes(requested) ? requested : undefined
 
-  const [sources, dnsChecks] = await Promise.all([getProblemSources(days, LIMIT, domain), getLatestDnsChecksByDomain()])
+  const [sources, dnsChecks] = await Promise.all([getProblemSources(scope, days, LIMIT, domain), getLatestDnsChecksByDomain(scope)])
   const totalFailing = sources.reduce((acc, s) => acc + s.failing, 0)
   const uncheckedDomains = [...new Set(sources.map((s) => s.domain))].filter(
     (d) => !(dnsChecks.get(d.toLowerCase()) as { spf_expanded?: SpfExpansion } | undefined)?.spf_expanded

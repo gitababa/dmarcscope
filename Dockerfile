@@ -4,6 +4,8 @@
 #   docker build -t dmarcscope .
 #   docker run --env-file .env -p 3000:3000 dmarcscope
 #   docker run --env-file .env dmarcscope node scripts/migrate.mjs   # apply migrations
+#   docker run --env-file .env dmarcscope node scripts/settings-import.mjs
+#   docker run --env-file .env dmarcscope node scripts/secrets-reencrypt.mjs
 
 FROM node:22-alpine AS deps
 WORKDIR /app
@@ -24,10 +26,12 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 # Self-contained server from `output: 'standalone'` (includes the pg driver),
-# plus the migration runner and its SQL files.
+# plus the command-line scripts (migrations, settings import, secret
+# re-encryption) and what they need.
 COPY --from=build --chown=1000:1000 /app/.next/standalone ./
 COPY --from=build --chown=1000:1000 /app/.next/static ./.next/static
-COPY --chown=1000:1000 scripts/migrate.mjs ./scripts/migrate.mjs
+COPY --chown=1000:1000 scripts/migrate.mjs scripts/settings-import.mjs scripts/secrets-reencrypt.mjs ./scripts/
+COPY --chown=1000:1000 lib/envelope.mjs ./lib/envelope.mjs
 COPY --chown=1000:1000 db ./db
 # The image's "node" user, by number: Kubernetes can only verify
 # runAsNonRoot against a numeric UID.

@@ -1,12 +1,14 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { hasValidBearer } from '@/lib/config'
+import { machineScope } from '@/lib/auth/access'
 import { isValidDomainName, runAndStoreDnsCheck } from '@/lib/dns-run'
 import { getDomainNames } from '@/lib/queries'
+import { hasValidMachineToken } from '@/lib/settings'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-// Scheduled DNS checks for automation: `Authorization: Bearer <CRON_SECRET>`.
+// Scheduled DNS checks for automation: `Authorization: Bearer <token>`, the
+// token being the cron.secret setting (CRON_SECRET).
 //
 //   GET|POST /api/cron/dns-check             refresh every tracked domain
 //   GET|POST /api/cron/dns-check?domain=x    refresh one domain
@@ -15,7 +17,7 @@ export const maxDuration = 300
 // source is authorized by the domain's current SPF record. (GET is accepted
 // because some schedulers, Vercel Cron among them, can only send GET.)
 async function handle(req: NextRequest) {
-  if (!hasValidBearer(req.headers.get('authorization'))) {
+  if (!(await hasValidMachineToken(req.headers.get('authorization')))) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   }
 
@@ -23,7 +25,8 @@ async function handle(req: NextRequest) {
   if (one && !isValidDomainName(one)) {
     return NextResponse.json({ ok: false, error: 'invalid domain' }, { status: 400 })
   }
-  const domains = one ? [one] : await getDomainNames()
+  const scope = machineScope()
+  const domains = one ? [one] : await getDomainNames(scope)
 
   const deadline = Date.now() + 240_000
   const summary: Record<string, string> = {}
@@ -37,7 +40,7 @@ async function handle(req: NextRequest) {
           continue
         }
         try {
-          const outcome = await runAndStoreDnsCheck(d, { force: true })
+          const outcome = await runAndStoreDnsCheck(scope, d, { force: true })
           summary[d] =
             outcome.status === 'ok'
               ? `mx=${outcome.results.mx.status} spf=${outcome.results.spf.status} dmarc=${outcome.results.dmarc.status} dkim=${outcome.results.dkim.status}`

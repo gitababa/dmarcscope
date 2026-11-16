@@ -2,30 +2,51 @@
 // login. Nothing is stored server-side, so any number of replicas can serve
 // the same user without shared session storage.
 //
-// Each purpose ("session", "login") gets its own key derived from
-// SESSION_SECRET, so a login-state cookie can never be replayed as a session.
+// Each purpose gets its own key, so a cookie made for one purpose (say, the
+// half-finished sign-in between password and TOTP) can never be replayed as
+// another (a session). The keys derive from SESSION_SECRET where that is set
+// (as in 1.1.0), otherwise from APP_SECRET.
 
 import { EncryptJWT, jwtDecrypt } from 'jose'
 import { ConfigError, appUrl, envInt, type Env } from '../config'
 import type { Identity } from './types'
 
-type Purpose = 'session' | 'login'
+// session  a signed-in user
+// login    OIDC state, nonce and PKCE verifier between redirect and callback
+// mfa      password accepted, TOTP code still to come
+// setup    the setup wizard's progress
+// recovery the owner's new recovery codes, shown once after setup
+export type Purpose = 'session' | 'login' | 'mfa' | 'setup' | 'recovery'
 
 const keyCache = new Map<string, Promise<Uint8Array>>()
 
 function deriveKey(purpose: Purpose, env: Env): Promise<Uint8Array> {
-  const secret = env.SESSION_SECRET || ''
-  if (secret.length < 32) {
-    throw new ConfigError('SESSION_SECRET must be set to at least 32 random characters (generate one with: openssl rand -base64 32).')
+  // SESSION_SECRET keeps working where it is set; it keeps its 1.1.0
+  // derivation so that upgrading signs nobody out.
+  const sessionSecret = env.SESSION_SECRET || ''
+  let secret: string
+  let salt: string
+  if (sessionSecret) {
+    if (sessionSecret.length < 32) {
+      throw new ConfigError('SESSION_SECRET must be set to at least 32 random characters (generate one with: openssl rand -base64 32).')
+    }
+    secret = sessionSecret
+    salt = 'dmarcscope'
+  } else {
+    secret = env.APP_SECRET || ''
+    if (secret.length < 32) {
+      throw new ConfigError('APP_SECRET must be set to at least 32 random characters (generate one with: openssl rand -base64 32).')
+    }
+    salt = 'dmarcscope/app-secret/cookies'
   }
-  const cacheKey = `${purpose}:${secret}`
+  const cacheKey = `${purpose}:${salt}:${secret}`
   let key = keyCache.get(cacheKey)
   if (!key) {
     key = (async () => {
       const enc = new TextEncoder()
       const base = await crypto.subtle.importKey('raw', enc.encode(secret), 'HKDF', false, ['deriveBits'])
       const bits = await crypto.subtle.deriveBits(
-        { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('dmarcscope'), info: enc.encode(`cookie:${purpose}`) },
+        { name: 'HKDF', hash: 'SHA-256', salt: enc.encode(salt), info: enc.encode(`cookie:${purpose}`) },
         base,
         256
       )
@@ -36,7 +57,7 @@ function deriveKey(purpose: Purpose, env: Env): Promise<Uint8Array> {
   return key
 }
 
-async function seal(payload: Record<string, unknown>, purpose: Purpose, ttlSeconds: number, env: Env): Promise<string> {
+export async function seal(payload: Record<string, unknown>, purpose: Purpose, ttlSeconds: number, env: Env): Promise<string> {
   const key = await deriveKey(purpose, env)
   return new EncryptJWT(payload)
     .setProtectedHeader({ alg: 'dir', enc: 'A256GCM' })
@@ -45,7 +66,7 @@ async function seal(payload: Record<string, unknown>, purpose: Purpose, ttlSecon
     .encrypt(key)
 }
 
-async function unseal(token: string | undefined, purpose: Purpose, env: Env): Promise<Record<string, unknown> | null> {
+export async function unseal(token: string | undefined, purpose: Purpose, env: Env): Promise<Record<string, unknown> | null> {
   if (!token) return null
   const key = await deriveKey(purpose, env)
   try {
@@ -74,6 +95,11 @@ export function sessionCookieName(env: Env = process.env): string {
 
 export function loginCookieName(env: Env = process.env): string {
   return `${isSecureDeployment(env) ? '__Host-' : ''}dmarcscope_login`
+}
+
+// The cookie that carries a cookie of `purpose` (mfa, setup, recovery).
+export function purposeCookieName(purpose: 'mfa' | 'setup' | 'recovery', env: Env = process.env): string {
+  return `${isSecureDeployment(env) ? '__Host-' : ''}dmarcscope_${purpose}`
 }
 
 // Identity and group membership are captured at sign-in and live for this
@@ -110,26 +136,57 @@ export function cookieOptions(maxAge: number, env: Env = process.env) {
 
 // ---------- session ----------
 
-export async function sealSession(identity: Identity, env: Env = process.env): Promise<string> {
+export type SessionClaims = {
+  identity: Identity
+  // When the cookie was issued (seconds since the epoch).
+  issuedAt: number
+  // The users row it was issued to. Absent in cookies from before 2.0.
+  userId?: number
+  // How the person signed in.
+  method?: 'oidc' | 'password'
+}
+
+export async function sealSession(
+  identity: Identity,
+  env: Env = process.env,
+  extra: { userId?: number; method?: 'oidc' | 'password'; ttlSeconds?: number } = {}
+): Promise<string> {
   return seal(
-    { sub: identity.sub, email: identity.email, name: identity.name, groups: identity.groups },
+    {
+      sub: identity.sub,
+      email: identity.email,
+      name: identity.name,
+      groups: identity.groups,
+      ...(extra.userId != null ? { uid: extra.userId } : {}),
+      ...(extra.method ? { amr: extra.method } : {}),
+    },
     'session',
-    sessionTtlSeconds(env),
+    extra.ttlSeconds ?? sessionTtlSeconds(env),
     env
   )
 }
 
-export async function unsealSession(token: string | undefined, env: Env = process.env): Promise<Identity | null> {
+export async function unsealSessionClaims(token: string | undefined, env: Env = process.env): Promise<SessionClaims | null> {
   const notBefore = sessionNotBeforeSeconds(env)
   const p = await unseal(token, 'session', env)
-  if (!p || typeof p.sub !== 'string' || typeof p.email !== 'string') return null
-  if (notBefore != null && (typeof p.iat !== 'number' || p.iat < notBefore)) return null
+  if (!p || typeof p.sub !== 'string' || typeof p.email !== 'string' || typeof p.iat !== 'number') return null
+  if (notBefore != null && p.iat < notBefore) return null
+  if (p.uid !== undefined && !(typeof p.uid === 'number' && Number.isSafeInteger(p.uid) && p.uid > 0)) return null
   return {
-    sub: p.sub,
-    email: p.email,
-    name: typeof p.name === 'string' ? p.name : undefined,
-    groups: Array.isArray(p.groups) ? p.groups.filter((g): g is string => typeof g === 'string') : [],
+    identity: {
+      sub: p.sub,
+      email: p.email,
+      name: typeof p.name === 'string' ? p.name : undefined,
+      groups: Array.isArray(p.groups) ? p.groups.filter((g): g is string => typeof g === 'string') : [],
+    },
+    issuedAt: p.iat,
+    userId: typeof p.uid === 'number' ? p.uid : undefined,
+    method: p.amr === 'oidc' || p.amr === 'password' ? p.amr : undefined,
   }
+}
+
+export async function unsealSession(token: string | undefined, env: Env = process.env): Promise<Identity | null> {
+  return (await unsealSessionClaims(token, env))?.identity ?? null
 }
 
 // ---------- in-flight login state (PKCE verifier, state, nonce) ----------

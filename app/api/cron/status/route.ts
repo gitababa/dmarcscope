@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { hasValidBearer } from '@/lib/config'
+import { machineScope } from '@/lib/auth/access'
 import { getIngestHealth } from '@/lib/queries'
+import { hasValidMachineToken } from '@/lib/settings'
 
 export const dynamic = 'force-dynamic'
 
-// Ingest health for a monitor: `Authorization: Bearer <CRON_SECRET>`.
+// Ingest health for a monitor: `Authorization: Bearer <token>` (the
+// cron.secret setting, CRON_SECRET).
 //
 //   GET /api/cron/status   200 while a run has completed within
 //                          INGEST_STALE_HOURS (default 36), otherwise 503
@@ -14,11 +16,11 @@ export const dynamic = 'force-dynamic'
 // fails. A fresh install with no run yet also answers 503.
 export async function GET(req: NextRequest) {
   const headers = { 'cache-control': 'no-store' }
-  if (!hasValidBearer(req.headers.get('authorization'))) {
+  if (!(await hasValidMachineToken(req.headers.get('authorization')))) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401, headers })
   }
   try {
-    const health = await getIngestHealth()
+    const health = await getIngestHealth(machineScope())
     return NextResponse.json({ ok: health.status === 'ok', ...health }, { status: health.status === 'ok' ? 200 : 503, headers })
   } catch (e) {
     console.error('[status] ingest health check failed:', e instanceof Error ? e.message : e)
