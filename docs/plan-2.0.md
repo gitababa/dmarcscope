@@ -345,7 +345,8 @@ lower role (no cache), so the panel is gone. Search input is bound as a paramete
 
 ## Milestone 3 — Admin panel: SSO
 
-OIDC connection form with presets (Google, Microsoft Entra ID, Okta, Keycloak, generic):
+OIDC connection form with presets (Google, Microsoft Entra ID, Okta, generic; no Keycloak
+preset, by the owner's decision during milestone 3; Keycloak works through the generic preset):
 issuer, client id, client secret, scopes, email claim, groups claim, required claims,
 button label. "Test" runs a real authorization-code flow in a new window against the
 unsaved-as-active configuration and shows the claims that came back and which rule would
@@ -358,6 +359,89 @@ required claims, https issuer). The owner's local sign-in always remains availab
 Done when: a misconfigured connection (wrong secret, unreachable issuer, wrong redirect
 URI) cannot be activated and cannot lock anyone out, shown by tests; switching providers
 does not invalidate the owner's access; documentation has a walkthrough per preset.
+
+### Design
+
+**Where it applies.** The panel manages SSO only when sign-in is managed in the app
+(`AUTH_PROVIDER` unset). With `AUTH_PROVIDER=oidc`, the `OIDC_*` variables define the connection:
+the SSO page shows it as "managed by environment" and offers no edits. Proxy modes have no SSO
+page.
+
+**Data model (migration `0005`).** Table `sso_connections`:
+- `state`: `draft` or `active` (or `retired`). At most one row in each of `draft` and `active`,
+  enforced by partial unique indexes.
+- The connection itself: `preset`, `issuer`, `client_id`, `client_secret` (an encrypted
+  envelope bound to the row, or NULL for a public client), `scopes`, `email_claim`,
+  `groups_claim`, `required_claims`, `button_label`.
+- `revision`: incremented on every save of the draft.
+- `last_test` (JSONB): ok or failed, when, by whom, the revision it tested, the error code, the
+  claims that came back (minus tokens), and which rule would admit that person.
+- Audit columns.
+
+The active connection is part of the cached settings snapshot, so every instance picks up an
+activation within `SETTINGS_CACHE_SECONDS`.
+
+**Lifecycle (owner only).**
+1. *Edit*: there is one draft. Starting an edit copies the active connection into a new draft;
+   the secret is decrypted and re-encrypted for the new row. Saving validates the form and bumps
+   `revision`. A saved draft changes nothing about how anyone signs in.
+2. *Test*: opens in a new window. `/auth/sso-test` runs the real authorization-code flow (PKCE,
+   state, nonce) against the draft, and comes back to the same `/auth/callback`. The login-state
+   cookie marks the attempt as a test and carries the draft id, the revision and the owner's id.
+   A test callback never issues or changes a session and never creates users. It only records
+   `last_test`, and only if the caller is still that same owner. Every 1.1.0 rule applies:
+   verified email, the email from exactly one claim, required claims, https issuer.
+3. *Activate*: allowed only when `last_test` succeeded **for the current revision** within the
+   last 24 hours. In one transaction the previous active connection is retired, the draft becomes
+   active, `config_version` is bumped, and an audit entry is written.
+4. *Deactivate*: retires the active connection. Sign-in falls back to the owner's password.
+
+**Switches** (registry settings, owner-only, environment-overridable):
+- `auth.local_signin_non_owners` (`AUTH_LOCAL_SIGNIN_NON_OWNERS`, default off). Lets non-owners
+  who have a password and TOTP (in practice: a former owner) use the password sign-in.
+- `auth.enforce_sso` (`AUTH_ENFORCE_SSO`, default off). Non-owners must use SSO; the sign-in page
+  hides the password form behind "Owner sign-in". It applies only while a connection is active,
+  so it can never leave people with no way in.
+
+**Never locked out.**
+- The owner's password + TOTP sign-in is always available, whatever the switches or the state of
+  the connection.
+- A connection that breaks after activation (provider down, secret rotated) only makes the SSO
+  button fail with an error; the owner signs in locally and fixes or deactivates it.
+- Activating or switching a connection does not touch sessions or `users`, so the owner's (and
+  everyone's) access is unchanged.
+
+**Sign-in with the active connection.** The sign-in page shows the button (`button_label`).
+`/auth/login` and `/auth/callback` use the active connection from the snapshot. The callback
+resolves the person exactly as in milestone 1 (rules, pending requests, invitations), records
+them as `source = 'oidc'`, and always puts their user id in the session cookie.
+
+**Failure cases, all tested.**
+- An unreachable issuer, or a discovery document whose issuer does not match: the test fails at
+  the start.
+- A wrong client secret: the token request is refused.
+- A wrong redirect URI: the provider refuses, or returns an error to the callback.
+- An unverified email, a missing email claim, a required claim that does not match.
+- A test for an older revision, or one that is too old: activation is refused.
+- A test callback presented with a different session, or with no session: no result is
+  recorded.
+
+**Presets** fill in the issuer pattern and claims, with notes:
+- Google: `email`, `hd` recommended.
+- Microsoft Entra ID: `preferred_username`, groups are object IDs, single-tenant issuer.
+- Okta: `email`, `groups`.
+- Generic.
+
+`docs/sso.md` has a walkthrough per preset.
+
+**Built as designed, plus:**
+- The test is started by a same-origin form post (`POST /auth/sso-test`), so another site cannot
+  make the owner's browser start one.
+- Admins see only whether the draft passed; the details are the owner's.
+- Required claims must come from the signed ID token. A value from UserInfo no longer counts;
+  this applies to environment connections too.
+- The presets' placeholders are refused, including Google's `hd=example.com`.
+- No Keycloak preset, by the owner's decision; Keycloak works through the generic preset.
 
 ## Milestone 4 — Admin panel: mail and domains
 

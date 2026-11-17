@@ -105,6 +105,26 @@ function SettingForm({ setting, canEdit }: { setting: ResolvedSetting; canEdit: 
   if (setting.source === 'environment') return <span className="muted small">Change {setting.envVar}</span>
   if (!canEdit) return <span className="muted small">Owner only</span>
   const id = `setting-${setting.key.replace(/\W/g, '-')}`
+  if (setting.type === 'bool') {
+    return (
+      <form action={updateSettingAction} className="settings-edit">
+        <input type="hidden" name="key" value={setting.key} />
+        <label htmlFor={id} className="visually-hidden">
+          New value for {setting.label}
+        </label>
+        <select id={id} name="value" defaultValue={setting.value ? 'true' : 'false'}>
+          <option value="true">on</option>
+          <option value="false">off</option>
+        </select>
+        <SubmitButton className="btn btn-sm">Save</SubmitButton>
+        {setting.source === 'database' && (
+          <button className="btn btn-sm" type="submit" name="clear" value="1">
+            Reset
+          </button>
+        )}
+      </form>
+    )
+  }
   return (
     <form action={updateSettingAction} className="settings-edit">
       <input type="hidden" name="key" value={setting.key} />

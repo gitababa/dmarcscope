@@ -178,9 +178,9 @@ to a 170-second mailbox budget per run; a large backlog is worked through over s
 Nothing in the environment has to change.
 
 1. Back up the database.
-2. Run the migrations with the new image (`node scripts/migrate.mjs`). Migrations `0003` and
-   `0004` only add tables, columns and indexes (users, settings, access rules, audit log, setup
-   tokens, invitations); they change no existing data.
+2. Run the migrations with the new image (`node scripts/migrate.mjs`). Migrations `0003` to
+   `0005` only add tables, columns and indexes (users, settings, access rules, audit log, setup
+   tokens, invitations, single sign-on connections); they change no existing data.
 3. Deploy the new web image with the **same environment**. Sign-in, the access lists, the
    machine endpoints and the dashboards behave exactly as before, and existing sessions stay
    valid. People who sign in from now on are recorded in the users table, and the request gate

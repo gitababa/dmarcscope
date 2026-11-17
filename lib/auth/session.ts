@@ -196,6 +196,10 @@ export type LoginState = {
   nonce: string
   codeVerifier: string
   returnTo: string
+  // A test of a draft single sign-on connection (lib/sso.ts): which draft,
+  // which revision of it, and which owner started the test. A test never
+  // issues a session.
+  test?: { connectionId: number; revision: number; userId: number }
 }
 
 export async function sealLoginState(state: LoginState, env: Env = process.env): Promise<string> {
@@ -213,7 +217,13 @@ export async function unsealLoginState(token: string | undefined, env: Env = pro
   ) {
     return null
   }
-  return { state: p.state, nonce: p.nonce, codeVerifier: p.codeVerifier, returnTo: p.returnTo }
+  const t = p.test as Record<string, unknown> | undefined
+  const test =
+    t && Number.isSafeInteger(t.connectionId) && Number.isSafeInteger(t.revision) && Number.isSafeInteger(t.userId)
+      ? { connectionId: t.connectionId as number, revision: t.revision as number, userId: t.userId as number }
+      : undefined
+  if (t && !test) return null
+  return { state: p.state, nonce: p.nonce, codeVerifier: p.codeVerifier, returnTo: p.returnTo, ...(test ? { test } : {}) }
 }
 
 // Only same-site relative paths are acceptable post-login destinations.

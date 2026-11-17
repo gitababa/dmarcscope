@@ -54,3 +54,16 @@ export async function hasValidMachineToken(authorization: string | null, env: En
   if (!secret) return false
   return safeEqual(authorization, `Bearer ${secret}`)
 }
+
+// How people may sign in, as configured. `enforceSso` is only in force while a
+// single sign-on connection is active, so it can never leave people without
+// a way in; the owner's password sign-in is never affected by either switch.
+export async function getSignInPolicy(env: Env = process.env): Promise<{ nonOwnerPasswords: boolean; enforceSso: boolean }> {
+  const store = configStore()
+  const [nonOwners, enforce, snap] = await Promise.all([
+    store.get('auth.local_signin_non_owners', env),
+    store.get('auth.enforce_sso', env),
+    store.snapshot(),
+  ])
+  return { nonOwnerPasswords: nonOwners === true, enforceSso: enforce === true && snap.sso != null }
+}

@@ -7,7 +7,8 @@ import { authProvider, hasSignInPage } from '@/lib/auth'
 import { unsealMfaState } from '@/lib/auth/mfa-state'
 import { getAuth } from '@/lib/auth/server'
 import { purposeCookieName, safeReturnTo } from '@/lib/auth/session'
-import { configStore, getAppName } from '@/lib/settings'
+import { currentOidcSettings } from '@/lib/auth/connection'
+import { configStore, getAppName, getSignInPolicy } from '@/lib/settings'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Sign in' }
@@ -42,13 +43,20 @@ export default async function LoginPage({
   if (auth.status === 'forbidden') redirect('/denied')
 
   const appName = await getAppName()
-  // The owner's password sign-in: the only way in when sign-in is managed in
-  // the app, and the way past single sign-on when that is broken.
-  const passwordForm = provider === 'local' || method === 'password'
+  // Single sign-on: the environment's connection, or the one activated in
+  // the panel. A broken one must not take the password sign-in down with it.
+  const connection = await currentOidcSettings().catch((err) => {
+    console.error('[auth] single sign-on connection unusable:', err instanceof Error ? err.message : String(err))
+    return null
+  })
+  // The password sign-in: the only way in without single sign-on, and the
+  // owner's way past single sign-on when that is broken.
+  const passwordForm = !connection || method === 'password'
   const mfa = passwordForm && step === 'code' ? await unsealMfaState((await cookies()).get(purposeCookieName('mfa'))?.value) : null
-  const ownerExists = provider === 'oidc' && !passwordForm ? (await configStore().snapshot().catch(() => null))?.ownerExists : false
+  const ownerExists = connection && !passwordForm ? (await configStore().snapshot().catch(() => null))?.ownerExists : false
+  const enforced = connection ? (await getSignInPolicy().catch(() => null))?.enforceSso : false
 
-  const providerName = process.env.OIDC_PROVIDER_NAME?.trim()
+  const providerName = connection?.label
   const ssoHref = returnTo === '/' ? '/auth/login' : `/auth/login?returnTo=${encodeURIComponent(returnTo)}`
   const passwordHref = `/login?method=password${returnTo === '/' ? '' : `&returnTo=${encodeURIComponent(returnTo)}`}`
 
@@ -79,7 +87,7 @@ export default async function LoginPage({
             </a>
             {ownerExists && (
               <div className="auth-alt">
-                <Link href={passwordHref}>Owner sign-in with password</Link>
+                <Link href={passwordHref}>{enforced || provider === 'oidc' ? 'Owner sign-in with password' : 'Sign in with a password'}</Link>
               </div>
             )}
           </>
@@ -115,7 +123,7 @@ export default async function LoginPage({
           </form>
         )}
 
-        {passwordForm && provider === 'oidc' && (
+        {passwordForm && connection && (
           <div className="auth-alt">
             <Link href={returnTo === '/' ? '/login' : `/login?returnTo=${encodeURIComponent(returnTo)}`}>Back to single sign-on</Link>
           </div>

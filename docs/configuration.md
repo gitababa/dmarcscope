@@ -28,10 +28,13 @@ is fixed the setting uses its default, or, for a secret, counts as not set.
 | Application name | `APP_NAME` | `DMARCscope` | admins |
 | Ingest staleness warning (hours) | `INGEST_STALE_HOURS` | `36` | admins |
 | Session length (hours) | `SESSION_MAX_AGE_HOURS` | `12` | owner |
+| Password sign-in for non-owners | `AUTH_LOCAL_SIGNIN_NON_OWNERS` | off | owner |
+| Require single sign-on (while a connection is active) | `AUTH_ENFORCE_SSO` | off | owner |
 | Machine endpoint token (secret) | `CRON_SECRET` | — (endpoints closed) | owner |
 
-More settings move into the panel in later 2.0 milestones (single sign-on, the reports mailbox,
-monitored domains, alerting).
+The single sign-on connection itself is configured under **Admin → Sign-in** ([sso.md](sso.md)).
+More settings move into the panel in later 2.0 milestones (the reports mailbox, monitored
+domains, alerting).
 
 ### Secrets in the database
 

@@ -4,6 +4,7 @@ const LINKS = [
   { href: '/admin', label: 'Settings' },
   { href: '/admin/users', label: 'Users' },
   { href: '/admin/rules', label: 'Access rules' },
+  { href: '/admin/sso', label: 'Sign-in' },
   { href: '/admin/audit', label: 'Audit log' },
 ]
 

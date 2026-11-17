@@ -55,6 +55,22 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
   Every change and every refusal is audited.
 - Migration `0004` (invitations, audit log indexes).
 
+### Added — milestone 3, single sign-on in the panel
+
+- **Admin → Sign-in** (owner): an OpenID Connect connection from a preset (Google, Microsoft
+  Entra ID, Okta, or any other provider). A draft is tested with a real sign-in in a new
+  window, which shows the claims that came back and which rule would admit that person. Only a
+  passed test of the draft as saved, less than a day old, can activate it. Walkthroughs per
+  provider in [docs/sso.md](docs/sso.md).
+- Switches: password sign-in for non-owners (`AUTH_LOCAL_SIGNIN_NON_OWNERS`), require single
+  sign-on (`AUTH_ENFORCE_SSO`). The owner's password sign-in is never affected.
+- Migration `0005` (`sso_connections`).
+
+### Security
+
+- Required claims (`OIDC_REQUIRED_CLAIMS`, and those of a panel connection) must be in the signed ID
+  token; a value from the UserInfo endpoint no longer satisfies them.
+
 ### Changed
 
 - `AUTH_PROVIDER` is optional: unset now means "sign-in managed in the app" instead of a

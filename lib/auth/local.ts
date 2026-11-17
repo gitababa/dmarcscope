@@ -1,8 +1,10 @@
 // The local account's sign-in: password (scrypt), then a TOTP code or a
 // recovery code.
 //
-// Until single sign-on is configured in the panel (milestone 3), only the
-// owner can sign in this way; local sign-in for anyone else is off.
+// The owner can always sign in this way. Anyone else needs a password and
+// TOTP (in practice, a former owner) and the "password sign-in for
+// non-owners" switch, and is refused while single sign-on is required
+// (lib/settings: getSignInPolicy).
 //
 // What a caller learns is deliberately coarse: "invalid" or "locked". A
 // wrong password, an unknown address, a disabled account and an account
@@ -13,6 +15,7 @@ import type { Pool } from 'pg'
 import { recordAudit } from '../audit'
 import { EnvelopeError, PasswordHashError, burnPasswordCheck, decryptSecret, hashRecoveryCode, matchTotp, normalizeRecoveryCode, verifyPassword } from '../crypto'
 import type { Env } from '../config'
+import { getSignInPolicy } from '../settings'
 import {
   ACCOUNT_THRESHOLD,
   ADDRESS_THRESHOLD,
@@ -52,9 +55,12 @@ async function findCandidate(db: Pool, by: { email: string } | { id: number }): 
   return rows[0] ?? null
 }
 
+type Policy = { nonOwnerPasswords: boolean; enforceSso: boolean }
+
 // May this account sign in with a password at all?
-function eligible(u: Candidate): boolean {
-  return u.status === 'active' && u.role === 'owner' && !!u.password_hash && !!u.totp_secret && !!u.totp_confirmed_at
+function eligible(u: Candidate, policy: Policy): boolean {
+  if (u.status !== 'active' || !u.password_hash || !u.totp_secret || !u.totp_confirmed_at) return false
+  return u.role === 'owner' || (policy.nonOwnerPasswords && !policy.enforceSso)
 }
 
 async function fail(db: Pool, ip: string | null, account: { userId: number } | { email: string }, stage: 'password' | 'second_factor', reason: string) {
@@ -102,7 +108,7 @@ export async function checkPassword(db: Pool, rawEmail: string, password: string
     await fail(db, ip, { email }, 'password', 'unknown_account')
     return { ok: false, reason: 'invalid' }
   }
-  if (!valid || !eligible(user)) {
+  if (!valid || !eligible(user, await getSignInPolicy())) {
     await fail(db, ip, { userId: Number(user.id) }, 'password', valid ? 'not_allowed' : 'wrong_password')
     return { ok: false, reason: 'invalid' }
   }
@@ -115,7 +121,7 @@ export async function checkSecondFactor(db: Pool, userId: number, input: string,
     return { ok: false, reason: 'locked' }
   }
   const user = await findCandidate(db, { id: userId })
-  if (!user || !eligible(user)) {
+  if (!user || !eligible(user, await getSignInPolicy(env))) {
     // The account changed between the two steps (disabled, demoted).
     if (user) await fail(db, ip, { userId }, 'second_factor', 'not_allowed')
     return { ok: false, reason: 'invalid' }
