@@ -299,8 +299,8 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
           </label>
         </div>
         <Field id="scopes" label="Scopes" value={draft.scopes} hint="Separated by spaces; must include openid." readOnly={!isOwner} required pattern="(.* )?openid( .*)?" maxLength={500} />
-        <Field id="email_claim" label="Email claim" value={draft.email_claim} hint="The one claim the address is read from. With email, the provider must say it is verified." readOnly={!isOwner} required pattern="[A-Za-z0-9_:./\-]{1,100}" />
-        <Field id="groups_claim" label="Groups claim" value={draft.groups_claim} readOnly={!isOwner} required pattern="[A-Za-z0-9_:./\-]{1,100}" />
+        <Field id="email_claim" label="Email claim" value={draft.email_claim} hint="The one claim the address is read from. With email, the provider must say it is verified." readOnly={!isOwner} required pattern="[A-Za-z0-9_:.\/\-]{1,100}" />
+        <Field id="groups_claim" label="Groups claim" value={draft.groups_claim} readOnly={!isOwner} required pattern="[A-Za-z0-9_:.\/\-]{1,100}" />
         <Field
           id="required_claims"
           label="Required claims"
@@ -319,7 +319,9 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
       <div className="test-box" aria-live="polite">
         <h3>Test and activate</h3>
         <p className="small">
-          {!t || !testedThis ? (
+          {!isOwner ? (
+            <>{t && testedThis ? (t.ok ? 'The current draft passed its test.' : 'The last test of the current draft failed.') : 'Not tested yet.'}</>
+          ) : !t || !testedThis ? (
             <>Not tested yet (revision {draft.revision}).</>
           ) : t.ok ? (
             <>
@@ -330,7 +332,7 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
               <Pill tone="bad">test failed</Pill> {relTime(t.at)}: {t.error?.message}
             </>
           )}{' '}
-          {t && testedThis && (
+          {isOwner && t && testedThis && (
             <a href="/admin/sso/test" target="_blank" rel="noopener">
               Details
             </a>
@@ -338,7 +340,7 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
         </p>
         {isOwner && (
           <div className="inline-form">
-            <a className="btn btn-sm" href="/auth/sso-test" target="_blank" rel="noopener">
+            <a className="btn btn-sm" href="/admin/sso/test?start=1" target="_blank" rel="noopener">
               Test sign-in (opens a new window)
             </a>
             <form action={activateAction}>

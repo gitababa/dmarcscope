@@ -18,7 +18,7 @@ import type { AccessRule, SsoConnectionRow } from './settings/store'
 
 export type SsoActor = Actor & { role: Role }
 
-export type Preset = 'google' | 'entra' | 'okta' | 'keycloak' | 'generic'
+export type Preset = 'google' | 'entra' | 'okta' | 'generic'
 
 export const PRESETS: Record<Preset, { label: string; issuer: string; emailClaim: string; groupsClaim: string; scopes: string; requiredClaims: string; note: string }> = {
   google: {
@@ -28,7 +28,7 @@ export const PRESETS: Record<Preset, { label: string; issuer: string; emailClaim
     groupsClaim: 'groups',
     scopes: 'openid email profile',
     requiredClaims: 'hd=example.com',
-    note: 'Google accepts any Google account: keep the hd required claim set to your Workspace domain. Google sends no groups.',
+    note: 'Google accepts any Google account: set the hd required claim to your Workspace domain (replace example.com). Google sends no groups.',
   },
   entra: {
     label: 'Microsoft',
@@ -37,7 +37,7 @@ export const PRESETS: Record<Preset, { label: string; issuer: string; emailClaim
     groupsClaim: 'groups',
     scopes: 'openid email profile',
     requiredClaims: '',
-    note: 'Use your tenant ID in the issuer (single tenant). Entra sends no email_verified and its email claim is editable, so people are identified by preferred_username. Groups arrive as object IDs.',
+    note: 'Use your tenant ID in the issuer (single tenant). Entra sends no email_verified and its email claim is editable, so people are identified by preferred_username. Whoever can change sign-in names in the tenant can therefore sign in here as anyone, the owner included. Groups arrive as object IDs.',
   },
   okta: {
     label: 'Okta',
@@ -47,15 +47,6 @@ export const PRESETS: Record<Preset, { label: string; issuer: string; emailClaim
     scopes: 'openid email profile groups',
     requiredClaims: '',
     note: 'With a custom authorization server the issuer is https://YOUR-ORG.okta.com/oauth2/default. Add a groups claim to use group rules.',
-  },
-  keycloak: {
-    label: 'Keycloak',
-    issuer: 'https://KEYCLOAK-HOST/realms/REALM',
-    emailClaim: 'email',
-    groupsClaim: 'groups',
-    scopes: 'openid email profile',
-    requiredClaims: '',
-    note: 'Add a "Group Membership" mapper with the token claim name groups to use group rules. Keep "Full group path" on and write group rules with the full path (for example /dmarc-admins): a short name can match a same-named group elsewhere in the tree.',
   },
   generic: {
     label: 'Single sign-on',
@@ -162,7 +153,7 @@ export type DraftInput = {
 
 const CLAIM = /^[A-Za-z0-9_:./-]{1,100}$/
 // The presets' issuer patterns still waiting to be filled in.
-const PLACEHOLDER = /TENANT-ID|YOUR-ORG|KEYCLOAK-HOST|\/realms\/REALM$/
+const PLACEHOLDER = /TENANT-ID|YOUR-ORG/
 const PRINTABLE = /^[^\x00-\x1f\x7f]*$/
 
 export function validateDraft(input: DraftInput, env: Env = process.env): Omit<DraftInput, 'clientSecret' | 'clearSecret'> & { preset: Preset } {
@@ -191,7 +182,7 @@ export function validateDraft(input: DraftInput, env: Env = process.env): Omit<D
   const groupsClaim = input.groupsClaim.trim()
   if (!CLAIM.test(groupsClaim)) bad('groups_claim')
   const requiredClaims = input.requiredClaims.trim()
-  if (requiredClaims.length > 1000 || !PRINTABLE.test(requiredClaims)) bad('required_claims')
+  if (requiredClaims.length > 1000 || !PRINTABLE.test(requiredClaims) || /=\s*example\.com\b/i.test(requiredClaims)) bad('required_claims')
   try {
     parseRequiredClaims(requiredClaims)
   } catch (err) {

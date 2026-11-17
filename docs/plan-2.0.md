@@ -345,7 +345,8 @@ lower role (no cache), so the panel is gone. Search input is bound as a paramete
 
 ## Milestone 3 — Admin panel: SSO
 
-OIDC connection form with presets (Google, Microsoft Entra ID, Okta, Keycloak, generic):
+OIDC connection form with presets (Google, Microsoft Entra ID, Okta, generic; no Keycloak
+preset, by the owner's decision during milestone 3; Keycloak works through the generic preset):
 issuer, client id, client secret, scopes, email claim, groups claim, required claims,
 button label. "Test" runs a real authorization-code flow in a new window against the
 unsaved-as-active configuration and shows the claims that came back and which rule would
@@ -429,10 +430,18 @@ them as `source = 'oidc'`, and always puts their user id in the session cookie.
 - Google: `email`, `hd` recommended.
 - Microsoft Entra ID: `preferred_username`, groups are object IDs, single-tenant issuer.
 - Okta: `email`, `groups`.
-- Keycloak: `email`, `groups` mapper.
 - Generic.
 
 `docs/sso.md` has a walkthrough per preset.
+
+**Built as designed, plus:**
+- The test is started by a same-origin form post (`POST /auth/sso-test`), so another site cannot
+  make the owner's browser start one.
+- Admins see only whether the draft passed; the details are the owner's.
+- Required claims must come from the signed ID token. A value from UserInfo no longer counts;
+  this applies to environment connections too.
+- The presets' placeholders are refused, including Google's `hd=example.com`.
+- No Keycloak preset, by the owner's decision; Keycloak works through the generic preset.
 
 ## Milestone 4 — Admin panel: mail and domains
 

@@ -5,7 +5,7 @@
 CREATE TABLE IF NOT EXISTS sso_connections (
   id BIGSERIAL PRIMARY KEY,
   state TEXT NOT NULL CHECK (state IN ('draft', 'active', 'retired')),
-  preset TEXT NOT NULL CHECK (preset IN ('google', 'entra', 'okta', 'keycloak', 'generic')),
+  preset TEXT NOT NULL CHECK (preset IN ('google', 'entra', 'okta', 'generic')),
   issuer TEXT NOT NULL,
   client_id TEXT NOT NULL,
   client_secret TEXT,             -- encrypted envelope bound to this row; NULL: public client (PKCE only)

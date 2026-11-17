@@ -186,10 +186,13 @@ export async function exchangeCode(
   if (!sub) throw new LoginError('failed', 'ID token has no subject')
 
   // Some providers only return email / groups from the UserInfo endpoint.
+  // Required claims never come from there: they must be in the signed ID
+  // token, which is what ties the sign-in to the organization.
+  const required = new Set(parseRequiredClaims(settings.requiredClaims).map((r) => r.claim))
   if ((!asString(claims[settings.emailClaim]) || claims[settings.groupsClaim] == null) && config.serverMetadata().userinfo_endpoint) {
     try {
       const info = await oidc.fetchUserInfo(config, tokens.access_token, sub)
-      for (const [k, v] of Object.entries(info)) if (claims[k] == null) claims[k] = v
+      for (const [k, v] of Object.entries(info)) if (claims[k] == null && !required.has(k)) claims[k] = v
     } catch {
       // UserInfo is optional; fall through with what the ID token gave us.
     }

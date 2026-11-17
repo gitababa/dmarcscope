@@ -16,6 +16,8 @@ export class MockIdp {
   clientSecret = 'mock-idp-client-secret'
   redirectUris: string[] = []
   nextUser: MockUser = { sub: 'nobody' }
+  // Extra claims served from a UserInfo endpoint (none: no endpoint).
+  userinfo: Record<string, unknown> | null = null
   private codes = new Map<string, { user: MockUser; nonce: string; challenge: string; redirectUri: string }>()
 
   async start(): Promise<this> {
@@ -33,6 +35,7 @@ export class MockIdp {
           authorization_endpoint: `${this.issuer}/authorize`,
           token_endpoint: `${this.issuer}/token`,
           jwks_uri: `${this.issuer}/jwks`,
+          ...(this.userinfo ? { userinfo_endpoint: `${this.issuer}/userinfo` } : {}),
           response_types_supported: ['code'],
           subject_types_supported: ['public'],
           id_token_signing_alg_values_supported: ['RS256'],
@@ -41,6 +44,7 @@ export class MockIdp {
         })
       }
       if (url.pathname === '/jwks') return json(200, { keys: [jwk] })
+      if (url.pathname === '/userinfo' && this.userinfo) return json(200, { sub: this.nextUser.sub, ...this.userinfo })
       if (url.pathname === '/authorize') {
         const q = url.searchParams
         const redirectUri = q.get('redirect_uri') || ''

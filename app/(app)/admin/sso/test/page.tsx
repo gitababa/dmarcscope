@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { FocusedSubmitButton } from '@/components/client'
 import { Pill } from '@/components/ui'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
@@ -20,10 +21,31 @@ const HINTS: Record<string, string> = {
   failed: 'The provider’s answer was not a valid sign-in.',
 }
 
-// Shown in the window the test opened. The claims are the tester's own.
-export default async function SsoTestPage() {
+// The test window. With ?start=1 it offers to start the test (a form post,
+// so that opening this page from another site starts nothing); afterwards it
+// shows the outcome. The claims are the tester's own.
+export default async function SsoTestPage({ searchParams }: { searchParams: Promise<{ start?: string }> }) {
   await requirePageRole('owner')
+  const { start } = await searchParams
   const draft = await getConnection(getPool(), 'draft')
+  if (start === '1') {
+    return (
+      <div className="card" style={{ maxWidth: 560, margin: '0 auto' }}>
+        <h1 style={{ marginTop: 0, fontSize: '1.3rem' }}>Test single sign-on</h1>
+        {draft ? (
+          <form method="post" action="/auth/sso-test">
+            <p>
+              You will be sent to <strong>{draft.issuer}</strong> to sign in, then back here to see what the provider sent.
+              Your current session is not changed.
+            </p>
+            <FocusedSubmitButton className="btn btn-primary">Start the test sign-in</FocusedSubmitButton>
+          </form>
+        ) : (
+          <p>There is no draft to test.</p>
+        )}
+      </div>
+    )
+  }
   const t = draft?.last_test
   const current = t && draft && t.revision === draft.revision
 

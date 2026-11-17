@@ -31,9 +31,14 @@ describe.skipIf(!TEST_DATABASE_URL)('single sign-on from the panel', () => {
   const cookieOf = async (who: 'owner' | 'admin') =>
     session.sealSession({ sub: `user:${ids[who]}`, email: `${who}@example.com`, groups: [] }, process.env, { userId: ids[who] })
 
-  const request = (path: string, cookies: Record<string, string> = {}) =>
+  const request = (path: string, cookies: Record<string, string> = {}, method = 'GET', origin: string | null = BASE) =>
     new NextRequest(path.startsWith('http') ? path : `${BASE}${path}`, {
-      headers: { cookie: Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; '), 'x-forwarded-for': '192.0.2.50' },
+      method,
+      headers: {
+        cookie: Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; '),
+        'x-forwarded-for': '192.0.2.50',
+        ...(origin ? { origin } : {}),
+      },
     })
   const setCookies = (res: Response) =>
     Object.fromEntries(res.headers.getSetCookie().map((c) => c.split(';')[0]).map((p) => [p.slice(0, p.indexOf('=')), p.slice(p.indexOf('=') + 1)]))
@@ -41,8 +46,10 @@ describe.skipIf(!TEST_DATABASE_URL)('single sign-on from the panel', () => {
 
   // The whole test flow, as the owner's browser would run it.
   async function runTest(as: 'owner' | 'admin' = 'owner', callbackAs: 'owner' | 'admin' | null = as) {
-    const start = await testRoute.GET(request('/auth/sso-test', { dmarcscope_session: await cookieOf(as) }))
-    const location = start.headers.get('location') || ''
+    const start = await testRoute.POST(request('/auth/sso-test', { dmarcscope_session: await cookieOf(as) }, 'POST'))
+    // Either a page that moves on to the provider, or a redirect to the result.
+    const page = start.status === 200 ? await start.clone().text() : ''
+    const location = (/url=([^"]+)"/.exec(page)?.[1] ?? start.headers.get('location') ?? '').replace(/&amp;/g, '&')
     if (start.status === 404 || !location.startsWith(idp.issuer)) return { start, callback: null }
     const login = setCookies(start).dmarcscope_login
     const authorize = await fetch(location, { redirect: 'manual' })
@@ -116,10 +123,24 @@ describe.skipIf(!TEST_DATABASE_URL)('single sign-on from the panel', () => {
     await refused(sso.discardDraft(pool, ADMIN()), 'not_allowed')
     const { start } = await runTest('admin')
     expect(start.status).toBe(404)
-    const anonymous = await testRoute.GET(request('/auth/sso-test'))
+    const anonymous = await testRoute.POST(request('/auth/sso-test', {}, 'POST'))
     expect(anonymous.status).toBe(404)
+    // started from another site: refused before anything else
+    const crossSite = await testRoute.POST(request('/auth/sso-test', { dmarcscope_session: await cookieOf('owner') }, 'POST', 'https://evil.example'))
+    expect(crossSite.status).toBe(403)
     const refusals = (await db.admin.query(`SELECT detail FROM audit_log WHERE action = 'action_refused'`)).rows
     expect(refusals.length).toBeGreaterThanOrEqual(6)
+  })
+
+  it('validates the draft, and never keeps the placeholders of a preset', async () => {
+    await sso.startDraft(pool, OWNER(), 'google')
+    expect((await draft())!.required_claims).toBe('hd=example.com')
+    await refused(sso.saveDraft(pool, OWNER(), { ...goodDraft(), requiredClaims: 'hd=example.com' }), 'invalid')
+    await sso.discardDraft(pool, OWNER())
+    // there is no Keycloak preset: asking for one gives a generic draft
+    await sso.startDraft(pool, OWNER(), 'keycloak')
+    expect((await draft())!.preset).toBe('generic')
+    await sso.discardDraft(pool, OWNER())
   })
 
   it('validates the draft', async () => {
@@ -179,11 +200,38 @@ describe.skipIf(!TEST_DATABASE_URL)('single sign-on from the panel', () => {
     await runTest()
     expect((await draft())!.last_test).toMatchObject({ ok: false, error: { code: 'unverified_email' } })
 
-    await sso.saveDraft(pool, OWNER(), { ...goodDraft(), requiredClaims: 'hd=example.com' })
+    await sso.saveDraft(pool, OWNER(), { ...goodDraft(), requiredClaims: 'hd=corp.example' })
     idp.nextUser = { sub: 'x', email: 'owner@example.com', email_verified: true }
     await runTest()
     expect((await draft())!.last_test).toMatchObject({ ok: false, error: { code: 'wrong_account' } })
     await refused(sso.activateDraft(pool, OWNER()), 'test_failed')
+  })
+
+  it('takes required claims from the signed ID token only, never from UserInfo', async () => {
+    // A provider of its own: discovery documents are cached per issuer, and
+    // this one advertises a UserInfo endpoint.
+    const withUserinfo = await new MockIdp().start()
+    withUserinfo.redirectUris = [`${BASE}/auth/callback`]
+    withUserinfo.userinfo = { hd: 'corp.example', name: 'From UserInfo' }
+    const old = idp
+    idp = withUserinfo
+    try {
+      await sso.startDraft(pool, OWNER(), 'generic')
+      await sso.saveDraft(pool, OWNER(), { ...goodDraft(), requiredClaims: 'hd=corp.example' })
+      idp.nextUser = { sub: 'x', email: 'owner@example.com', email_verified: true }
+      await runTest()
+      expect((await draft())!.last_test).toMatchObject({ ok: false, error: { code: 'wrong_account' } })
+      // UserInfo was consulted (its name was taken), its hd was not
+      const claims = (await draft())!.last_test!.claims!
+      expect(claims.name).toBe('From UserInfo')
+      expect('hd' in claims).toBe(false)
+      idp.nextUser = { sub: 'x', email: 'owner@example.com', email_verified: true, hd: 'corp.example' }
+      await runTest()
+      expect((await draft())!.last_test).toMatchObject({ ok: true })
+    } finally {
+      idp = old
+      await withUserinfo.stop()
+    }
   })
 
   it('activates only a passed test of the current revision, less than a day old', async () => {
