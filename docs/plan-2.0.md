@@ -334,6 +334,12 @@ lower role (no cache), so the panel is gone. Search input is bound as a paramete
 **Built as designed**, plus:
 - An admin cannot delete a rule that grants a role above their own. Rules grant only admin and
   viewer, so in practice this never refuses anyone today.
+- Every action re-reads the caller's own account inside its transaction. If it was disabled or
+  removed since the request started, the action is refused.
+- Approve and reject also apply the rank rule: a request an owner raised to owner is not an
+  admin's to decide. Enabling a user makes their role `assigned`, so a re-enabled rejected
+  request actually gets in. An invitation lets someone in only if accepting it succeeded;
+  otherwise the current row decides.
 - On a confirmation step, keyboard focus moves to the confirming button. This is a small client
   component, because React does not apply `autoFocus` to server-rendered HTML.
 

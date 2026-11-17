@@ -115,8 +115,9 @@ describe.skipIf(!TEST_DATABASE_URL)('managing people', () => {
   it('never leaves no active owner', async () => {
     // the only active owner cannot be demoted, disabled or removed...
     await refused(people.changeRole(pool, OWNER(), ids.owner, 'admin'), 'last_owner')
-    await refused(people.removeUser(pool, { ...OWNER(), userId: ids.owner2 }, ids.owner), 'last_owner')
-    await refused(people.setDisabled(pool, { ...OWNER(), userId: ids.owner2 }, ids.owner, true), 'last_owner')
+    // (acting as an owner without a users row, as with AUTH_PROVIDER=none)
+    await refused(people.removeUser(pool, { ...OWNER(), userId: null }, ids.owner), 'last_owner')
+    await refused(people.setDisabled(pool, { ...OWNER(), userId: null }, ids.owner, true), 'last_owner')
     // ...a disabled owner does not count
     await people.setDisabled(pool, OWNER(), ids.owner2, false)
     // with two active owners, one can step down
@@ -215,6 +216,44 @@ describe.skipIf(!TEST_DATABASE_URL)('managing people', () => {
     await people.deleteRule(pool, ADMIN(), id)
     await refused(people.deleteRule(pool, ADMIN(), id), 'not_found')
     expect(await lastAudit()).toMatchObject({ action: 'action_refused', detail: { action: 'rule_deleted', reason: 'not_found' } })
+  })
+
+  it('refuses a caller whose own account was disabled or removed since their request started', async () => {
+    await db.admin.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [ids.admin])
+    await refused(people.changeRole(pool, ADMIN(), ids.viewer, 'admin'), 'not_allowed')
+    await db.admin.query(`DELETE FROM users WHERE id = $1`, [ids.admin])
+    await refused(people.signOutEverywhere(pool, ADMIN(), ids.viewer), 'not_allowed')
+    expect((await row('viewer')).role).toBe('viewer')
+  })
+
+  it('does not let an admin approve or reject a request an owner raised to owner', async () => {
+    await db.admin.query(`UPDATE users SET role = 'owner' WHERE id = $1`, [ids.asker])
+    await refused(people.approveRequest(pool, ADMIN(), ids.asker, 'viewer'), 'target_above_you')
+    await refused(people.rejectRequest(pool, ADMIN(), ids.asker), 'target_above_you')
+  })
+
+  it('lets a rejected person in when an administrator enables them again', async () => {
+    await people.rejectRequest(pool, ADMIN(), ids.asker)
+    const req = { headers: { get: (n: string) => (n === 'x-forwarded-email' ? 'asker@elsewhere.test' : null) }, cookie: () => undefined }
+    const dir = new PgDirectory(() => pool)
+    expect(await authenticate(req, { AUTH_PROVIDER: 'proxy-header' }, dir)).toMatchObject({ status: 'forbidden' })
+    await people.setDisabled(pool, ADMIN(), ids.asker, false)
+    expect(await authenticate(req, { AUTH_PROVIDER: 'proxy-header' }, dir)).toMatchObject({ status: 'ok', session: { role: 'viewer' } })
+  })
+
+  it('does not accept an invitation that was disabled at the same moment', async () => {
+    const id = await people.inviteUser(pool, ADMIN(), { email: 'race@example.com', role: 'admin' })
+    const real = new PgDirectory(() => pool)
+    // the invitation is disabled between reading the row and accepting it
+    const racing = Object.assign(Object.create(real), {
+      acceptInvitation: async (uid: number) => {
+        await db.admin.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [uid])
+        return real.acceptInvitation(uid)
+      },
+    })
+    const req = { headers: { get: (n: string) => (n === 'x-forwarded-email' ? 'race@example.com' : null) }, cookie: () => undefined }
+    expect(await authenticate(req, { AUTH_PROVIDER: 'proxy-header' }, racing)).toMatchObject({ status: 'forbidden' })
+    expect((await db.admin.query(`SELECT status FROM users WHERE id = $1`, [id])).rows[0].status).toBe('disabled')
   })
 
   it('lists people with search and filters, matching % and _ literally', async () => {

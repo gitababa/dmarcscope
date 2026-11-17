@@ -89,7 +89,9 @@ export async function resolveAccess(
       detail: { role, by: 'access_rule', provider },
     })
   } else if (invited) {
-    await dir.acceptInvitation(row.id)
+    // Decide on what is stored: if the invitation was disabled or removed
+    // at this moment, start again from the current row.
+    if (!(await dir.acceptInvitation(row.id))) return resolveAccess(identity, provider, facts, env, dir)
     await dir.audit({
       action: 'invitation_accepted',
       actor: { userId: row.id, email: row.email, ip: null },

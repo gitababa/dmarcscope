@@ -54,7 +54,9 @@ export class MemoryDirectory implements Directory {
   }
   async acceptInvitation(id: number) {
     const u = this.users.find((x) => x.id === id)
-    if (u && u.status === 'pending' && u.invited_at) u.status = 'active'
+    if (!u || u.status !== 'pending' || !u.invited_at) return false
+    u.status = 'active'
+    return true
   }
   async audit(entry: AuditEntry) {
     this.audits.push(entry)

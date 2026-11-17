@@ -110,6 +110,12 @@ async function act<T>(
   try {
     if (!atLeast(actor.role, 'admin')) throw new Refusal('not_allowed')
     return await transaction(db, async (c) => {
+      // The caller's role was worked out at the start of the request; if
+      // their own account was disabled or removed since, stop here.
+      if (actor.userId != null) {
+        const me = await c.query<{ status: string }>(`SELECT status FROM users WHERE id = $1`, [actor.userId])
+        if (me.rows[0]?.status !== 'active') throw new Refusal('not_allowed')
+      }
       const { result, detail, target: finalTarget } = await fn(c)
       await writeAudit(c, { action, actor, target: finalTarget ?? target, detail })
       return result
@@ -157,6 +163,7 @@ export async function approveRequest(db: Pool, actor: PeopleActor, id: number, r
     mayGrant(actor, role)
     const { target } = await lockTarget(c, id)
     if (target.status !== 'pending' || target.invited_at) throw new Refusal('not_pending')
+    mayActOn(actor, target)
     await c.query(`UPDATE users SET role = $2, role_source = 'assigned', status = 'active' WHERE id = $1`, [id, role])
     return { result: undefined, detail: { email: target.email, role } }
   })
@@ -166,6 +173,7 @@ export async function rejectRequest(db: Pool, actor: PeopleActor, id: number): P
   await act(db, actor, 'request_rejected', userTarget(id), async (c) => {
     const { target } = await lockTarget(c, id)
     if (target.status !== 'pending' || target.invited_at) throw new Refusal('not_pending')
+    mayActOn(actor, target)
     await c.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [id])
     return { result: undefined, detail: { email: target.email } }
   })
@@ -189,8 +197,14 @@ export async function setDisabled(db: Pool, actor: PeopleActor, id: number, disa
     mayActOn(actor, target)
     if (disabled && actor.userId === id) throw new Refusal('self')
     if (disabled) guardLastOwner(target, activeOwners, false)
-    // Re-enabling a pending request means letting the person in: same as approving.
-    await c.query(`UPDATE users SET status = $2 WHERE id = $1`, [id, disabled ? 'disabled' : 'active'])
+    if (disabled) {
+      await c.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [id])
+    } else {
+      // Enabling lets the person in with the role shown. Without
+      // role_source = 'assigned' someone no rule admits (a rejected request)
+      // would still be refused.
+      await c.query(`UPDATE users SET status = 'active', role_source = 'assigned' WHERE id = $1`, [id])
+    }
     return { result: undefined, detail: { email: target.email, from: target.status } }
   })
 }

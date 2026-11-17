@@ -42,8 +42,9 @@ export interface Directory {
   requestAccess(identity: Identity, source: UserSource): Promise<UserRow | null>
   // A rule-admitted person's role changed, or a pending one is now admitted.
   syncRuleRole(id: number, role: Role): Promise<void>
-  // An invited person signed in for the first time.
-  acceptInvitation(id: number): Promise<void>
+  // An invited person signed in for the first time. False if the invitation
+  // changed meanwhile (disabled, removed, already accepted).
+  acceptInvitation(id: number): Promise<boolean>
   audit(entry: AuditEntry): Promise<void>
 }
 
@@ -105,7 +106,11 @@ export class PgDirectory implements Directory {
   }
 
   async acceptInvitation(id: number) {
-    await this.pool().query(`UPDATE users SET status = 'active' WHERE id = $1 AND status = 'pending' AND invited_at IS NOT NULL`, [id])
+    const { rowCount } = await this.pool().query(
+      `UPDATE users SET status = 'active' WHERE id = $1 AND status = 'pending' AND invited_at IS NOT NULL AND role_source = 'assigned'`,
+      [id]
+    )
+    return rowCount === 1
   }
 
   async audit(entry: AuditEntry) {
