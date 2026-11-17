@@ -8,9 +8,11 @@
 // listing one that nothing reads would show administrators a control that
 // does nothing. Milestones 3-5 add sign-in, mailbox and alerting settings.
 
-export type SettingType = 'string' | 'int' | 'secret'
+export type SettingType = 'string' | 'int' | 'bool' | 'secret'
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
+
+type Value = string | number | boolean
 
 export type SettingDef = {
   key: string
@@ -18,14 +20,14 @@ export type SettingDef = {
   description: string
   type: SettingType
   env: string
-  default: string | number | null
+  default: Value | null
   // Owner-only to change: sign-in and secret settings.
   ownerOnly: boolean
   // Validates a value typed into the panel or stored in the database.
-  parse(raw: unknown): Parsed<string | number>
+  parse(raw: unknown): Parsed<Value>
   // Validates the environment variable. Kept as lenient as 1.1.0 was where
   // 1.1.0 clamped a number into range, so existing deployments keep working.
-  parseEnv(raw: string): Parsed<string | number>
+  parseEnv(raw: string): Parsed<Value>
 }
 
 const intParser = (min: number, max: number) => (raw: unknown): Parsed<number> => {
@@ -42,6 +44,16 @@ const clampedIntEnv = (min: number, max: number) => (raw: string): Parsed<number
   const text = raw.trim()
   if (!/^-?\d+$/.test(text)) return { ok: false, error: `must be a whole number from ${min} to ${max}` }
   return { ok: true, value: Math.min(max, Math.max(min, Number(text))) }
+}
+
+// Yes/no. The environment accepts the same spellings as every other boolean
+// variable; anything else is an error, not "no".
+const boolParser = (raw: unknown): Parsed<boolean> => {
+  if (typeof raw === 'boolean') return { ok: true, value: raw }
+  const t = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  if (['1', 'true', 'yes', 'on'].includes(t)) return { ok: true, value: true }
+  if (['0', 'false', 'no', 'off'].includes(t)) return { ok: true, value: false }
+  return { ok: false, error: 'must be true or false' }
 }
 
 const SETTINGS: SettingDef[] = [
@@ -90,6 +102,30 @@ const SETTINGS: SettingDef[] = [
     parseEnv: clampedIntEnv(1, 168),
   },
   {
+    key: 'auth.local_signin_non_owners',
+    label: 'Password sign-in for non-owners',
+    description:
+      'Lets people other than the owner who have a password and an authenticator (for example a former owner) use the password sign-in. The owner can always sign in with a password.',
+    type: 'bool',
+    env: 'AUTH_LOCAL_SIGNIN_NON_OWNERS',
+    default: false,
+    ownerOnly: true,
+    parse: boolParser,
+    parseEnv: boolParser,
+  },
+  {
+    key: 'auth.enforce_sso',
+    label: 'Require single sign-on',
+    description:
+      'While a single sign-on connection is active, everyone but the owner must use it; the sign-in page shows the password form only behind "Owner sign-in".',
+    type: 'bool',
+    env: 'AUTH_ENFORCE_SSO',
+    default: false,
+    ownerOnly: true,
+    parse: boolParser,
+    parseEnv: boolParser,
+  },
+  {
     key: 'cron.secret',
     label: 'Machine endpoint token',
     description: 'Bearer token for /api/cron/*, at least 16 characters. The endpoints refuse every request while it is unset.',
@@ -111,7 +147,13 @@ const SETTINGS: SettingDef[] = [
 
 export const REGISTRY: ReadonlyMap<string, SettingDef> = new Map(SETTINGS.map((s) => [s.key, s]))
 
-export type SettingKey = 'app.name' | 'ingest.stale_hours' | 'session.max_age_hours' | 'cron.secret'
+export type SettingKey =
+  | 'app.name'
+  | 'ingest.stale_hours'
+  | 'session.max_age_hours'
+  | 'auth.local_signin_non_owners'
+  | 'auth.enforce_sso'
+  | 'cron.secret'
 export type SecretSettingKey = 'cron.secret'
 export type PlainSettingKey = Exclude<SettingKey, SecretSettingKey>
 

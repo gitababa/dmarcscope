@@ -20,11 +20,27 @@ import { REGISTRY, type PlainSettingKey, type SecretSettingKey, type SettingDef,
 
 export type AccessRule = { kind: 'email_domain' | 'group'; value: string; role: 'admin' | 'viewer' }
 
+// The active single sign-on connection (milestone 3), secret still encrypted.
+export type SsoConnectionRow = {
+  id: number
+  preset: string
+  issuer: string
+  client_id: string
+  client_secret: string | null
+  scopes: string
+  email_claim: string
+  groups_claim: string
+  required_claims: string
+  button_label: string
+  revision: number
+}
+
 export type Snapshot = {
   version: number
   rows: ReadonlyMap<string, { value: unknown; isSecret: boolean }>
   rules: readonly AccessRule[]
   ownerExists: boolean
+  sso: SsoConnectionRow | null
 }
 
 export type SettingSource = 'environment' | 'database' | 'default'
@@ -41,7 +57,7 @@ export type ResolvedSetting = {
   envVar: string
   isSet: boolean
   error: string | null
-  value?: string | number | null
+  value?: string | number | boolean | null
 }
 
 export class SettingError extends Error {
@@ -101,12 +117,17 @@ export class ConfigStore {
       settings: Array<{ key: string; value: unknown; is_secret: boolean }>
       rules: AccessRule[]
       owner_exists: boolean
+      sso: (Omit<SsoConnectionRow, 'id'> & { id: string | number }) | null
     }>(`
       SELECT
         (SELECT version FROM config_version) AS version,
         (SELECT COALESCE(json_agg(json_build_object('key', key, 'value', value, 'is_secret', is_secret)), '[]'::json) FROM settings) AS settings,
         (SELECT COALESCE(json_agg(json_build_object('kind', kind, 'value', value, 'role', role) ORDER BY id), '[]'::json) FROM access_rules) AS rules,
-        EXISTS (SELECT 1 FROM users WHERE role = 'owner') AS owner_exists
+        EXISTS (SELECT 1 FROM users WHERE role = 'owner') AS owner_exists,
+        (SELECT row_to_json(c) FROM (
+           SELECT id, preset, issuer, client_id, client_secret, scopes, email_claim, groups_claim,
+                  required_claims, button_label, revision
+           FROM sso_connections WHERE state = 'active') c) AS sso
     `)
     const r = rows[0]
     const snapshot: Snapshot = {
@@ -114,6 +135,7 @@ export class ConfigStore {
       rows: new Map(r.settings.map((s) => [s.key, { value: s.value, isSecret: s.is_secret }])),
       rules: r.rules,
       ownerExists: r.owner_exists,
+      sso: r.sso ? { ...r.sso, id: Number(r.sso.id) } : null,
     }
     this.cached = { snapshot, checkedAt: Date.now() }
     return snapshot
@@ -133,7 +155,7 @@ export class ConfigStore {
   // The one place a value is worked out. `plain` is the usable value (null
   // for an invalid secret); it never leaves this module for secrets except
   // through readSecret().
-  private async resolveInternal(def: SettingDef, env: Env): Promise<{ meta: ResolvedSetting; plain: string | number | null }> {
+  private async resolveInternal(def: SettingDef, env: Env): Promise<{ meta: ResolvedSetting; plain: string | number | boolean | null }> {
     const base = {
       key: def.key,
       label: def.label,
@@ -193,7 +215,7 @@ export class ConfigStore {
     return out
   }
 
-  async get(key: PlainSettingKey, env: Env = process.env): Promise<string | number | null> {
+  async get(key: PlainSettingKey, env: Env = process.env): Promise<string | number | boolean | null> {
     const def = settingDef(key)
     if (def.type === 'secret') {
       throw new SettingError('secret_not_readable', `Setting "${key}" is a secret and cannot be read through this path`)
