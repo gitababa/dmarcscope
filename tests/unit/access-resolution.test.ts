@@ -96,6 +96,16 @@ describe('roles from the database', () => {
     expect(await authenticate(proxyReq('viewer@example.com'), env, dir)).toMatchObject({ session: { role: 'admin' } })
   })
 
+  it('turns an invitation into an active user at the first request, with the invited role', async () => {
+    const u = dir.add({ email: 'invited@elsewhere.test', role: 'admin', status: 'pending', invited_at: new Date().toISOString() })
+    expect(await authenticate(proxyReq('invited@elsewhere.test'), PROXY, dir)).toMatchObject({ status: 'ok', session: { role: 'admin', userId: u.id } })
+    expect(u.status).toBe('active')
+    expect(dir.audits.map((a) => a.action)).toEqual(['invitation_accepted'])
+    // a pending request (no invitation) stays refused
+    dir.add({ email: 'asked@elsewhere.test', role: 'viewer', role_source: 'rule', status: 'pending' })
+    expect(await authenticate(proxyReq('asked@elsewhere.test'), PROXY, dir)).toMatchObject({ status: 'forbidden' })
+  })
+
   it('does not accept a cookie for a user that is gone or whose address changed', async () => {
     const u = dir.add({ email: 'x@example.com', role: 'viewer' })
     const token = await session('x@example.com', OIDC, { userId: u.id })

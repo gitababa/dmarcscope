@@ -22,6 +22,7 @@ export class MemoryDirectory implements Directory {
       status: 'active',
       source: 'local',
       sessions_valid_after: null,
+      invited_at: null,
       ...row,
     }
     this.users.push(user)
@@ -50,6 +51,10 @@ export class MemoryDirectory implements Directory {
       u.role = role
       u.status = 'active'
     }
+  }
+  async acceptInvitation(id: number) {
+    const u = this.users.find((x) => x.id === id)
+    if (u && u.status === 'pending' && u.invited_at) u.status = 'active'
   }
   async audit(entry: AuditEntry) {
     this.audits.push(entry)
