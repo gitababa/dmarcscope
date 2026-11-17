@@ -55,7 +55,7 @@ export const PRESETS: Record<Preset, { label: string; issuer: string; emailClaim
     groupsClaim: 'groups',
     scopes: 'openid email profile',
     requiredClaims: '',
-    note: 'Add a "Group Membership" mapper named groups (full path off) to use group rules.',
+    note: 'Add a "Group Membership" mapper with the token claim name groups to use group rules. Keep "Full group path" on and write group rules with the full path (for example /dmarc-admins): a short name can match a same-named group elsewhere in the tree.',
   },
   generic: {
     label: 'Single sign-on',

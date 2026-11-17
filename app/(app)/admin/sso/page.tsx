@@ -216,7 +216,10 @@ export default async function AdminSsoPage({
                   <input type="hidden" name="key" value={s.key} />
                   <input type="hidden" name="back" value="/admin/sso" />
                   <input type="hidden" name="value" value={s.value ? 'false' : 'true'} />
-                  <SubmitButton className="btn btn-sm">{s.value ? 'Turn off' : 'Turn on'}</SubmitButton>
+                  <SubmitButton className="btn btn-sm">
+                    {s.value ? 'Turn off' : 'Turn on'}
+                    <span className="visually-hidden">: {s.label}</span>
+                  </SubmitButton>
                 </form>
               ) : (
                 <span />
@@ -279,8 +282,8 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
             ))}
           </select>
         </div>
-        <Field id="issuer" label="Issuer" value={draft.issuer} hint="Replace the capitalised parts with your own values." readOnly={!isOwner} required />
-        <Field id="client_id" label="Client ID" value={draft.client_id} readOnly={!isOwner} required />
+        <Field id="issuer" label="Issuer" value={draft.issuer} hint="Replace the capitalised parts with your own values." readOnly={!isOwner} required type="url" pattern="https?://\S+" maxLength={500} />
+        <Field id="client_id" label="Client ID" value={draft.client_id} readOnly={!isOwner} required pattern="\S+" maxLength={300} />
         <div className="field">
           <label htmlFor="client_secret">Client secret</label>
           <input
@@ -295,9 +298,9 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
             <input type="checkbox" name="public_client" value="1" disabled={!isOwner} /> No secret (public client, PKCE only)
           </label>
         </div>
-        <Field id="scopes" label="Scopes" value={draft.scopes} readOnly={!isOwner} required />
-        <Field id="email_claim" label="Email claim" value={draft.email_claim} hint="The one claim the address is read from. With email, the provider must say it is verified." readOnly={!isOwner} required />
-        <Field id="groups_claim" label="Groups claim" value={draft.groups_claim} readOnly={!isOwner} required />
+        <Field id="scopes" label="Scopes" value={draft.scopes} hint="Separated by spaces; must include openid." readOnly={!isOwner} required pattern="(.* )?openid( .*)?" maxLength={500} />
+        <Field id="email_claim" label="Email claim" value={draft.email_claim} hint="The one claim the address is read from. With email, the provider must say it is verified." readOnly={!isOwner} required pattern="[A-Za-z0-9_:./\-]{1,100}" />
+        <Field id="groups_claim" label="Groups claim" value={draft.groups_claim} readOnly={!isOwner} required pattern="[A-Za-z0-9_:./\-]{1,100}" />
         <Field
           id="required_claims"
           label="Required claims"
@@ -305,7 +308,7 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
           hint="Every sign-in must carry these, e.g. hd=example.com (Google Workspace) or tid=<tenant id>. claim=value, separated by commas; | between alternatives."
           readOnly={!isOwner}
         />
-        <Field id="button_label" label="Button label" value={draft.button_label} hint='Shown as "Sign in with …".' readOnly={!isOwner} />
+        <Field id="button_label" label="Button label" value={draft.button_label} hint='Shown as "Sign in with …".' readOnly={!isOwner} maxLength={60} />
         {isOwner && (
           <div className="inline-form">
             <SubmitButton className="btn btn-primary btn-sm">Save draft</SubmitButton>
@@ -355,11 +358,44 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
   )
 }
 
-function Field({ id, label, value, hint, readOnly, required }: { id: string; label: string; value: string; hint?: string; readOnly?: boolean; required?: boolean }) {
+// Browser-side constraints mirror the server's (lib/sso.ts validateDraft),
+// so a typo is caught before the form is sent and nothing typed is lost.
+function Field({
+  id,
+  label,
+  value,
+  hint,
+  readOnly,
+  required,
+  type = 'text',
+  pattern,
+  maxLength,
+}: {
+  id: string
+  label: string
+  value: string
+  hint?: string
+  readOnly?: boolean
+  required?: boolean
+  type?: 'text' | 'url'
+  pattern?: string
+  maxLength?: number
+}) {
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
-      <input id={id} name={id} type="text" defaultValue={value} readOnly={readOnly} required={required} spellCheck={false} autoComplete="off" />
+      <input
+        id={id}
+        name={id}
+        type={type}
+        defaultValue={value}
+        readOnly={readOnly}
+        required={required}
+        pattern={pattern}
+        maxLength={maxLength}
+        spellCheck={false}
+        autoComplete="off"
+      />
       {hint && <span className="field-hint">{hint}</span>}
     </div>
   )

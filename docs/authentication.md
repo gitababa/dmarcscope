@@ -26,7 +26,8 @@ With only `DATABASE_URL`, `APP_URL` and `APP_SECRET` set, the app manages sign-i
   you there, and `/api/*` answers 503 `{"error":"setup_required"}`. The probes keep working.
 - The owner signs in with an email address, a password and a code from an authenticator app
   (TOTP), or a recovery code instead of the app code.
-- Single sign-on configured in the panel arrives in a later 2.0 release. Until then the owner is
+- Single sign-on (any OpenID Connect provider) is configured, tested and activated in the panel
+  under **Admin → Sign-in**: see [sso.md](sso.md). Until a connection is active, the owner is
   the only person who can sign in in this mode.
 
 ### First run: the setup wizard
