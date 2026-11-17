@@ -75,13 +75,39 @@ the per-account lockout does not.
 Everyone who signs in is recorded in the users table:
 
 - someone an access rule admits is recorded as **active**, with the rule's role;
-- someone no rule admits is recorded as a **pending** request and sees "Access not granted".
-  Approving requests in the panel arrives in a later 2.0 release; until then, add a rule (or the
-  person's address to `ALLOWED_EMAILS`) and they get in on their next request;
+- someone no rule admits is recorded as a **pending** request and sees "Access not granted"
+  until an administrator approves them (or a rule starts admitting them);
+- someone **invited** in the panel gets the invited role at their first sign-in;
 - a **disabled** user is refused whatever the rules say.
 
 A role that came from a rule is worked out again on every request, so removing the rule removes
-the access, as it always did. Administrators can see everyone under **Admin → Users**.
+the access, as it always did.
+
+### Managing people (Admin → Users, Admin → Access rules)
+
+Administrators and the owner can:
+
+| Action | Effect |
+|---|---|
+| Approve / reject a request | Approve gives the chosen role. Reject disables the request: the person stays refused, and can be re-enabled later. |
+| Invite | Gives an address a role before the person first signs in through single sign-on or the access proxy. No email is sent. |
+| Change role | Takes effect on the person's next request; the role is then fixed (`assigned`) rather than coming from a rule. |
+| Disable / enable | Disabled people are refused from their next request on. |
+| Sign out everywhere | Ends every session the person has (`sessions_valid_after`). |
+| Remove | Deletes the user; their history stays in the audit log. If a rule admits them, they come back as a new user at their next sign-in, so disable them to keep them out. |
+| Add / delete access rules | An email domain or a group, giving admin or viewer. Applies within `SETTINGS_CACHE_SECONDS` everywhere. |
+
+Guard rails, enforced on the server whatever the page showed:
+
+- an admin can change only admins and viewers, and give only those roles; only an owner can
+  change an owner or make someone an owner;
+- nobody can disable or remove their own account;
+- the last active owner cannot be demoted, disabled or removed;
+- every change, and every refused attempt, is recorded in the audit log.
+
+**Admin → Audit log** filters by action, who, target and date, and downloads the filtered log as
+CSV (at most 100,000 rows; the download itself is recorded). Cells a spreadsheet would treat as a
+formula are prefixed with `'`.
 
 ## Access rules (all providers)
 
@@ -89,7 +115,8 @@ Access is **denied by default**. Being able to sign in at the identity provider 
 a person must match at least one rule (or have been given a role). Rules come from two places:
 the environment variables below, which cannot be changed in the panel, and the database, where
 `npm run settings:import` can copy them (and the panel will manage them in a later 2.0 release).
-All values are comma-separated and case-insensitive.
+All values are comma-separated and case-insensitive. Database rules are managed under
+**Admin → Access rules**, which also lists the environment's rules (read-only).
 
 | Variable | Grants |
 |---|---|
@@ -136,7 +163,7 @@ How quickly a removal takes effect depends on where you remove them:
 |---|---|
 | An access list (`ALLOWED_*`, `ADMIN_*`) | When the app restarts with the new value — the lists are environment variables, checked on every request. |
 | A database access rule | Within `SETTINGS_CACHE_SECONDS` (default 5) on every instance. |
-| The person's users row: disabled, role changed, or `sessions_valid_after` set ("sign out everywhere") | On their next request. (The panel for this arrives in a later 2.0 release.) |
+| The person in **Admin → Users**: disabled, role changed, removed, or "sign out everywhere" | On their next request. |
 | The person's account or groups at the provider, with `proxy-jwt` / `proxy-header` | On their next request (as fast as the proxy enforces it). |
 | The person's account or groups at the provider, with `oidc` | When their session expires: the identity and groups are fixed at sign-in for `SESSION_MAX_AGE_HOURS` (default 12, maximum 168). |
 

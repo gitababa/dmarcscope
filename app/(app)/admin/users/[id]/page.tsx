@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { SubmitButton } from '@/components/client'
+import { FocusedSubmitButton, SubmitButton } from '@/components/client'
 import { Pill } from '@/components/ui'
 import { getUser } from '@/lib/admin'
 import { atLeast } from '@/lib/auth/roles'
@@ -147,7 +147,8 @@ export default async function AdminUserPage({
                     they come back as a new user at their next sign-in; disable them instead to keep them out.
                   </span>
                   <span className="inline-form">
-                    <SubmitButton className="btn btn-sm">Yes, remove</SubmitButton>
+                    {/* Focus goes straight to the decision, for keyboard users. */}
+                    <FocusedSubmitButton className="btn btn-sm">Yes, remove</FocusedSubmitButton>
                     <Link href={back} className="small">
                       Cancel
                     </Link>

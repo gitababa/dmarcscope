@@ -1174,3 +1174,9 @@ button:focus-visible {
     margin-bottom: 0.45rem;
   }
 }
+.date-range {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}

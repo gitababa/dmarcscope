@@ -331,6 +331,12 @@ reports "changed meanwhile, see the current state". A demoted admin's next reque
 lower role (no cache), so the panel is gone. Search input is bound as a parameter, and
 `%`/`_` are escaped for `ILIKE`.
 
+**Built as designed**, plus:
+- An admin cannot delete a rule that grants a role above their own. Rules grant only admin and
+  viewer, so in practice this never refuses anyone today.
+- On a confirmation step, keyboard focus moves to the confirming button. This is a small client
+  component, because React does not apply `autoFocus` to server-rendered HTML.
+
 ## Milestone 3 — Admin panel: SSO
 
 OIDC connection form with presets (Google, Microsoft Entra ID, Okta, Keycloak, generic):

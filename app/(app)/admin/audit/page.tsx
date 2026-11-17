@@ -67,10 +67,12 @@ export default async function AdminAuditPage({ searchParams }: { searchParams: P
           Target contains
         </label>
         <input id="a-target" name="target" type="search" placeholder="Target (user:12, cron.secret…)" defaultValue={filters.target} maxLength={200} />
-        <label htmlFor="a-from">From</label>
-        <input id="a-from" name="from" type="date" defaultValue={filters.from} />
-        <label htmlFor="a-to">to</label>
-        <input id="a-to" name="to" type="date" defaultValue={filters.to} />
+        <span className="date-range">
+          <label htmlFor="a-from">From</label>
+          <input id="a-from" name="from" type="date" defaultValue={filters.from} />
+          <label htmlFor="a-to">to</label>
+          <input id="a-to" name="to" type="date" defaultValue={filters.to} />
+        </span>
         <button className="btn btn-sm" type="submit">
           Filter
         </button>
