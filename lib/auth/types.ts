@@ -1,6 +1,12 @@
-export type Role = 'admin' | 'viewer'
+// owner: everything, including sign-in and secret settings
+// admin: users, mailbox, domains, alerts, DNS checks
+// viewer: read-only
+export type Role = 'owner' | 'admin' | 'viewer'
 
-export type AuthProviderName = 'oidc' | 'proxy-jwt' | 'proxy-header' | 'none'
+// 'local' is AUTH_PROVIDER unset: the application manages sign-in itself
+// (the owner's password and TOTP now; single sign-on configured in the panel
+// from milestone 3).
+export type AuthProviderName = 'local' | 'oidc' | 'proxy-jwt' | 'proxy-header' | 'none'
 
 // Who the request is, as established by the configured provider.
 export type Identity = {
@@ -13,11 +19,16 @@ export type Identity = {
 export type Session = {
   identity: Identity
   role: Role
+  // The users row. Null only with AUTH_PROVIDER=none, which has no users.
+  userId: number | null
 }
 
 export type AuthResult =
   | { status: 'ok'; session: Session }
-  // No (valid) credentials on the request.
+  // No (valid) credentials on the request, or a session that was revoked.
   | { status: 'unauthenticated' }
-  // Authenticated, but not on any access list.
+  // Authenticated, but not admitted: on no access list, waiting for
+  // approval, or disabled.
   | { status: 'forbidden'; identity: Identity }
+  // AUTH_PROVIDER unset and no owner yet: only the setup wizard is served.
+  | { status: 'setup_required' }

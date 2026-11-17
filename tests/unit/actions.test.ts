@@ -29,14 +29,15 @@ vi.mock('next/headers', () => ({
 vi.mock('@/lib/auth/server', () => ({
   audit: vi.fn(),
   getAuth: async () => state.auth,
-  getAdminSession: async () => {
+  getAccessWithRole: async (minimum: string) => {
     const a = state.auth as { status: string; session?: { role: string } }
-    return a.status === 'ok' && a.session?.role === 'admin' ? a.session : null
+    const rank: Record<string, number> = { viewer: 1, admin: 2, owner: 3 }
+    return a.status === 'ok' && rank[a.session!.role] >= rank[minimum] ? { session: a.session, role: a.session!.role, domains: { kind: 'all' } } : null
   },
 }))
 vi.mock('@/lib/dns-run', async (original) => ({
   ...(await original<typeof import('@/lib/dns-run')>()),
-  runAndStoreDnsCheck: async (domain: string) => {
+  runAndStoreDnsCheck: async (_scope: unknown, domain: string) => {
     state.runs.push(domain)
     return state.outcome
   },

@@ -1,4 +1,11 @@
+// Every exported query takes a DomainScope as its first argument. A page gets
+// one only from the authorization function (lib/auth/access.ts); machine
+// endpoints from machineScope(). Today the scope is always "all domains";
+// milestone 6 filters by it.
+
+import { type DomainScope, assertScope } from './auth/access'
 import { sql } from './db'
+import { getIngestStaleHours } from './settings'
 
 // ---------- shared types ----------
 
@@ -91,7 +98,8 @@ const num = (v: string | number | null | undefined) => (v == null ? 0 : Number(v
 
 // ---------- overview queries ----------
 
-export async function getDomainSummaries(days = 7): Promise<DomainSummary[]> {
+export async function getDomainSummaries(scope: DomainScope, days = 7): Promise<DomainSummary[]> {
+  assertScope(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -132,7 +140,8 @@ export async function getDomainSummaries(days = 7): Promise<DomainSummary[]> {
   })
 }
 
-export async function getTopSources(days = 7, limit = 10): Promise<TopSource[]> {
+export async function getTopSources(scope: DomainScope, days = 7, limit = 10): Promise<TopSource[]> {
+  assertScope(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -158,7 +167,8 @@ export async function getTopSources(days = 7, limit = 10): Promise<TopSource[]> 
   return rows.map(mapSourceRow)
 }
 
-export async function getRecentIngestRuns(limit = 5): Promise<RecentRun[]> {
+export async function getRecentIngestRuns(scope: DomainScope, limit = 5): Promise<RecentRun[]> {
+  assertScope(scope)
   const rows = (await sql`
     SELECT id::int AS id, started_at, finished_at, messages_fetched, reports_parsed, reports_skipped,
            (errors IS NOT NULL AND jsonb_typeof(errors) = 'array' AND jsonb_array_length(errors) > 0) AS had_errors,
@@ -183,15 +193,12 @@ export type IngestHealth = {
   last_run_failed: boolean
 }
 
-// INGEST_STALE_HOURS: how long the dashboard may go without a completed
-// ingest run before it says so. The default suits a daily schedule.
-export function ingestStaleHours(env: Record<string, string | undefined> = process.env): number {
-  const n = Number.parseInt(env.INGEST_STALE_HOURS || '', 10)
-  return Number.isInteger(n) && n >= 1 ? Math.min(n, 24 * 90) : 36
-}
 
-export async function getIngestHealth(): Promise<IngestHealth> {
-  const hours = ingestStaleHours()
+export async function getIngestHealth(scope: DomainScope): Promise<IngestHealth> {
+  assertScope(scope)
+  // How long the dashboard may go without a completed ingest run before it
+  // says so (setting ingest.stale_hours, INGEST_STALE_HOURS).
+  const hours = await getIngestStaleHours()
   const rows = (await sql`
     SELECT
       (SELECT MAX(finished_at) FROM ingest_runs WHERE finished_at IS NOT NULL AND NOT failed) AS last_success_at,
@@ -219,7 +226,8 @@ export async function getIngestHealth(): Promise<IngestHealth> {
 }
 
 // Scans the whole records table: call it only when its answer will be shown.
-export async function getDataExtent(): Promise<DataExtent> {
+export async function getDataExtent(scope: DomainScope): Promise<DataExtent> {
+  assertScope(scope)
   const rows = (await sql`
     SELECT
       MIN(period_start) AS min_date,
@@ -239,7 +247,8 @@ export async function getDataExtent(): Promise<DataExtent> {
 // One bar per UTC day, by the day a record's reporting period began: reports
 // cover a UTC day, and a period ending at 23:59:59 or at midnight must land
 // in the same bar whatever time zone the database session uses.
-export async function getVolumeTimeseries(days = 7, domain?: string): Promise<TimeseriesPoint[]> {
+export async function getVolumeTimeseries(scope: DomainScope, days = 7, domain?: string): Promise<TimeseriesPoint[]> {
+  assertScope(scope)
   const since = cutoff(days)
   const rows = domain
     ? ((await sql`
@@ -272,14 +281,16 @@ export async function getVolumeTimeseries(days = 7, domain?: string): Promise<Ti
   }))
 }
 
-export async function getDomainNames(): Promise<string[]> {
+export async function getDomainNames(scope: DomainScope): Promise<string[]> {
+  assertScope(scope)
   const rows = await sql<{ name: string }>`SELECT name FROM domains ORDER BY name`
   return rows.map((r) => r.name)
 }
 
 // ---------- per-domain queries ----------
 
-export async function getDomainPolicy(domain: string): Promise<DomainPolicy | null> {
+export async function getDomainPolicy(scope: DomainScope, domain: string): Promise<DomainPolicy | null> {
+  assertScope(scope)
   const rows = (await sql`
     SELECT
       d.name AS domain,
@@ -314,10 +325,12 @@ export async function getDomainPolicy(domain: string): Promise<DomainPolicy | nu
 }
 
 export async function getSourcesForDomain(
+  scope: DomainScope,
   domain: string,
   days = 7,
   limit = 100
 ): Promise<DomainSourceRow[]> {
+  assertScope(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -351,7 +364,8 @@ export async function getSourcesForDomain(
   }))
 }
 
-export async function getAlignmentBreakdown(domain: string, days = 7): Promise<AlignmentBreakdown> {
+export async function getAlignmentBreakdown(scope: DomainScope, domain: string, days = 7): Promise<AlignmentBreakdown> {
+  assertScope(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -384,7 +398,8 @@ export type DkimSigner = { selector: string; signing_domain: string }
 // report lists every DKIM signature on a message — including third-party
 // signers like amazonses.com whose selectors are irrelevant to this domain's
 // own DNS. Alignment here is relaxed: exact match or subdomain either way.
-export async function getObservedDkimSigners(domain: string): Promise<DkimSigner[]> {
+export async function getObservedDkimSigners(scope: DomainScope, domain: string): Promise<DkimSigner[]> {
+  assertScope(scope)
   // Only the last 30 days: many providers rotate DKIM selectors and delete
   // old keys from DNS, so historical selectors produce false "missing" noise.
   // 'none' is parsedmarc's placeholder when a report omits the selector.
@@ -417,7 +432,8 @@ export async function getObservedDkimSigners(domain: string): Promise<DkimSigner
     .map((r) => ({ selector: r.selector, signing_domain: r.signing_domain }))
 }
 
-export async function getLatestDnsCheck(domain: string): Promise<Record<string, unknown> | null> {
+export async function getLatestDnsCheck(scope: DomainScope, domain: string): Promise<Record<string, unknown> | null> {
+  assertScope(scope)
   const rows = (await sql`
     SELECT c.results
     FROM dns_checks c
@@ -459,7 +475,8 @@ export type ProblemSource = {
   top_fail_envelope: string | null
 }
 
-export async function getProblemSources(days = 7, limit = 50, domain?: string): Promise<ProblemSource[]> {
+export async function getProblemSources(scope: DomainScope, days = 7, limit = 50, domain?: string): Promise<ProblemSource[]> {
+  assertScope(scope)
   const since = cutoff(days)
   const onlyDomain = domain ? domain.toLowerCase() : null
   const rows = (await sql`
@@ -518,7 +535,8 @@ export async function getProblemSources(days = 7, limit = 50, domain?: string): 
 
 // Latest DNS check per domain, in bulk — used by the Issues page for SPF
 // attribution across every domain that has problem sources.
-export async function getLatestDnsChecksByDomain(): Promise<Map<string, Record<string, unknown>>> {
+export async function getLatestDnsChecksByDomain(scope: DomainScope): Promise<Map<string, Record<string, unknown>>> {
+  assertScope(scope)
   const rows = (await sql`
     SELECT DISTINCT ON (c.domain_id) d.name AS domain, c.results
     FROM dns_checks c

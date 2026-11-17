@@ -22,16 +22,17 @@ export default async function OverviewPage({
 }: {
   searchParams: Promise<{ range?: string }>
 }) {
-  await requireViewer() // each page checks for itself; it does not rely on the layout or the proxy
+  // Each page checks for itself; it does not rely on the layout or the proxy.
+  const { domains: scope } = await requireViewer()
   const { range: rawRange } = await searchParams
   const days = parseRange(rawRange)
 
   const [domains, sources, runs, health, timeseries] = await Promise.all([
-    getDomainSummaries(days),
-    getTopSources(days, 10),
-    getRecentIngestRuns(5),
-    getIngestHealth(),
-    getVolumeTimeseries(days),
+    getDomainSummaries(scope, days),
+    getTopSources(scope, days, 10),
+    getRecentIngestRuns(scope, 5),
+    getIngestHealth(scope),
+    getVolumeTimeseries(scope, days),
   ])
 
   const totals = domains.reduce(
@@ -50,7 +51,7 @@ export default async function OverviewPage({
   const range = rangeParam(days)
   const lastRun = runs[0]
   // The whole-table extent is only needed to explain an empty window.
-  const extent = !hasData && days !== 0 && domains.length > 0 ? await getDataExtent() : null
+  const extent = !hasData && days !== 0 && domains.length > 0 ? await getDataExtent(scope) : null
   const staleNotice = health.status === 'stale' && (
     <div className="notice warn" role="status">
       <span>

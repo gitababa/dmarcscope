@@ -45,6 +45,12 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+      # A second, empty database for the first-run test: the app started with
+      # only the three required variables must serve the setup wizard.
+      - name: Fresh database for the first-run test
+        run: |
+          node -e "const pg=require('pg');const c=new pg.Client(process.env.TEST_DATABASE_URL);c.connect().then(()=>c.query('CREATE DATABASE dmarcscope_setup')).then(()=>c.end())"
+          DATABASE_URL="${TEST_DATABASE_URL%/*}/dmarcscope_setup" npm run db:migrate
       - name: End-to-end sign-in tests
         env:
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
@@ -62,10 +68,20 @@ jobs:
           HOSTNAME: 127.0.0.1
           E2E_BASE_URL: http://127.0.0.1:3101
           E2E_CRON_SECRET: ci-only-cron-secret-0123456789
+          E2E_SETUP_BASE_URL: http://127.0.0.1:3102
+          E2E_SETUP_LOG: ${{ runner.temp }}/setup-server.log
+          E2E_SETUP_APP_SECRET: ci-only-app-secret-for-first-run-0123456789
         run: |
           cp -R .next/static .next/standalone/.next/static
           node .next/standalone/server.js &
-          for i in $(seq 1 30); do curl -sf "$E2E_BASE_URL/api/healthz" >/dev/null && break; sleep 1; done
+          # First run: nothing but DATABASE_URL, APP_URL and APP_SECRET (and
+          # where to listen). env -i drops everything this job set above.
+          env -i PATH="$PATH" HOME="$HOME" \
+            DATABASE_URL="${TEST_DATABASE_URL%/*}/dmarcscope_setup" \
+            APP_URL=http://127.0.0.1:3102 APP_SECRET="$E2E_SETUP_APP_SECRET" \
+            PORT=3102 HOSTNAME=127.0.0.1 \
+            node .next/standalone/server.js > "$E2E_SETUP_LOG" 2>&1 &
+          for i in $(seq 1 30); do curl -sf "$E2E_BASE_URL/api/healthz" >/dev/null && curl -sf "$E2E_SETUP_BASE_URL/api/healthz" >/dev/null && break; sleep 1; done
           npm run test:e2e
 
   ingest:
@@ -100,6 +116,17 @@ jobs:
       - run: docker build -f Dockerfile.ingest -t dmarcscope-ingest .
       - name: Ingest image starts
         run: docker run --rm dmarcscope-ingest --version
+      - name: Ingest image can decrypt secrets saved by the web app
+        run: docker run --rm --entrypoint python dmarcscope-ingest -c "from ingestor.crypto import decrypt, encrypt; s='x'*32; assert decrypt(secrets=[s], purpose='setting', context='k', envelope=encrypt(secret=s, purpose='setting', context='k', plaintext='ok')).plaintext == 'ok'"
+      - name: Web image ships its command-line scripts
+        run: |
+          # Without DATABASE_URL each exits 2 (configuration error) once its
+          # imports have loaded; a missing file would exit 1.
+          for script in migrate settings-import secrets-reencrypt; do
+            code=0; docker run --rm dmarcscope node "scripts/$script.mjs" || code=$?
+            echo "$script: $code"
+            if [ "$script" = migrate ]; then test "$code" = 1; else test "$code" = 2; fi
+          done
       - name: Images run as a numeric non-root user (Kubernetes runAsNonRoot)
         run: |
           test "$(docker inspect -f '{{.Config.User}}' dmarcscope)" = "1000:1000"
@@ -112,6 +139,8 @@ jobs:
           python3 scripts/demo_reports.py demo-reports
           docker compose up -d --build
           docker compose run --rm ingest import /reports
+      - name: Settings import runs in the web image (dry run)
+        run: docker compose run --rm --no-deps web node scripts/settings-import.mjs --dry-run
       - name: Dashboard serves the imported data
         run: |
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/api/readyz >/dev/null && break; sleep 2; done

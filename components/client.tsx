@@ -12,12 +12,13 @@ const TABS = [
   { href: '/', label: 'Overview', match: (p: string) => p === '/' || p.startsWith('/domains') },
   { href: '/issues', label: 'Issues', match: (p: string) => p.startsWith('/issues') },
 ]
+const ADMIN_TAB = { href: '/admin', label: 'Admin', match: (p: string) => p.startsWith('/admin') }
 
-export function NavTabs() {
+export function NavTabs({ admin = false }: { admin?: boolean }) {
   const pathname = usePathname() || '/'
   return (
     <nav className="nav" aria-label="Main">
-      {TABS.map((t) => (
+      {(admin ? [...TABS, ADMIN_TAB] : TABS).map((t) => (
         <Link key={t.href} href={t.href} aria-current={t.match(pathname) ? 'page' : undefined}>
           {t.label}
         </Link>

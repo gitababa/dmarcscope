@@ -5,6 +5,7 @@ import { runDnsCheckAction } from '@/app/actions'
 import { SubmitButton } from '@/components/client'
 import { CategoryPill, Pill, RangeSwitcher, RateCell, Section, SourceCell } from '@/components/ui'
 import { VolumeChart } from '@/components/VolumeChart'
+import { atLeast } from '@/lib/auth/roles'
 import { requireViewer } from '@/lib/auth/server'
 import type { CheckStatus, DnsCheckResults } from '@/lib/dns-checks'
 import { isValidDomainName } from '@/lib/dns-run'
@@ -48,19 +49,20 @@ export default async function DomainPage({
   const domain = parseDomainParam(rawDomain)
   if (!domain) notFound()
   const days = parseRange(rawRange)
-  const session = await requireViewer()
+  const access = await requireViewer()
+  const scope = access.domains
 
   const [policy, sources, alignment, last30, timeseries, dnsCheck] = await Promise.all([
-    getDomainPolicy(domain),
-    getSourcesForDomain(domain, days, 100),
-    getAlignmentBreakdown(domain, days),
-    getAlignmentBreakdown(domain, 30),
-    getVolumeTimeseries(days, domain),
-    getLatestDnsCheck(domain) as Promise<DnsCheckResults | null>,
+    getDomainPolicy(scope, domain),
+    getSourcesForDomain(scope, domain, days, 100),
+    getAlignmentBreakdown(scope, domain, days),
+    getAlignmentBreakdown(scope, domain, 30),
+    getVolumeTimeseries(scope, days, domain),
+    getLatestDnsCheck(scope, domain) as Promise<DnsCheckResults | null>,
   ])
   if (policy == null) notFound()
 
-  const isAdmin = session.role === 'admin'
+  const isAdmin = atLeast(access.role, 'admin')
   const total = alignment.fully_aligned + alignment.dkim_only + alignment.spf_only + alignment.fully_failed
   const total30 = last30.fully_aligned + last30.dkim_only + last30.spf_only + last30.fully_failed
   const advice = policyAdvice({ policy: policy.policy, total30d: total30, passed30d: last30.dmarc_pass })

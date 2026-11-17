@@ -106,7 +106,8 @@ const looksLikeEmail = (v: string | undefined): v is string => Boolean(v && /^[^
 export async function completeLogin(
   callbackUrl: URL,
   login: LoginState,
-  env: Env = process.env
+  env: Env = process.env,
+  extraGroups: readonly string[] = []
 ): Promise<Identity> {
   const config = await getConfiguration(env)
 
@@ -138,7 +139,7 @@ export async function completeLogin(
     }
   }
 
-  return identityFromClaims(claims, env)
+  return identityFromClaims(claims, env, extraGroups)
 }
 
 // OIDC_REQUIRED_CLAIMS="hd=example.com,tid=1111|2222": every listed claim must
@@ -165,7 +166,7 @@ function claimMatches(actual: unknown, allowed: string[]): boolean {
 }
 
 // Turns validated token claims into an identity, or refuses the sign-in.
-export function identityFromClaims(claims: Record<string, unknown>, env: Env = process.env): Identity {
+export function identityFromClaims(claims: Record<string, unknown>, env: Env = process.env, extraGroups: readonly string[] = []): Identity {
   const sub = asString(claims.sub)
   if (!sub) throw new LoginError('failed', 'ID token has no subject')
 
@@ -194,7 +195,7 @@ export function identityFromClaims(claims: Record<string, unknown>, env: Env = p
     sub,
     email: email.toLowerCase(),
     name: asString(claims.name),
-    groups: relevantGroups(asStringList(claims[groupsClaim]), env),
+    groups: relevantGroups(asStringList(claims[groupsClaim]), env, extraGroups),
   }
 }
 

@@ -1,9 +1,18 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { SignJWT, exportJWK, generateKeyPair } from 'jose'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { authProvider, authenticate } from '@/lib/auth'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { authProvider, authenticate as authenticateWith } from '@/lib/auth'
+import { MemoryDirectory } from '../helpers/memory-directory'
 import { sealSession, sessionCookieName } from '@/lib/auth/session'
+
+// Who is in the database: nobody, so the access lists alone decide, as in
+// 1.1.0. (How the database changes that is tested in access-resolution.test.ts.)
+let dir = new MemoryDirectory()
+beforeEach(() => {
+  dir = new MemoryDirectory()
+})
+const authenticate = (r: Parameters<typeof authenticateWith>[0], env: Record<string, string | undefined>) => authenticateWith(r, env, dir)
 
 const req = (headers: Record<string, string> = {}, cookies: Record<string, string> = {}) => ({
   headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
@@ -11,8 +20,8 @@ const req = (headers: Record<string, string> = {}, cookies: Record<string, strin
 })
 
 describe('authProvider', () => {
-  it('requires an explicit choice', () => {
-    expect(() => authProvider({})).toThrow(/AUTH_PROVIDER is not set/)
+  it('manages sign-in in the app when unset, and refuses unknown values', () => {
+    expect(authProvider({})).toBe('local')
     expect(() => authProvider({ AUTH_PROVIDER: 'ldap' })).toThrow(/Unknown AUTH_PROVIDER/)
     expect(authProvider({ AUTH_PROVIDER: 'OIDC' })).toBe('oidc')
   })
