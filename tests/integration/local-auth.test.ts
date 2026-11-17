@@ -210,6 +210,8 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
   })
 
   // ---------- local sign-in ----------
+  // Each password check is a deliberately slow scrypt hash: these tests make
+  // dozens of them, which takes longer than vitest's default 5 s on CI runners.
 
   const signInPassword = async (email: string, password: string, ip = '198.51.100.30') =>
     record(await passwordRoute.POST(post('/auth/password', { email, password, returnTo: '/issues' }, { ip })))
@@ -217,7 +219,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     record(await secondFactorRoute.POST(post('/auth/second-factor', { code }, { cookies: { dmarcscope_mfa: mfa }, ip })))
   const resetLocks = () => db.admin.query(`UPDATE users SET failed_logins = 0, locked_until = NULL; DELETE FROM auth_throttle`)
 
-  it('refuses a wrong password and an unknown address in exactly the same way', async () => {
+  it('refuses a wrong password and an unknown address in exactly the same way', { timeout: 30_000 }, async () => {
     await resetLocks()
     const wrong = await signInPassword(OWNER, 'wrong-password-xxxx')
     const unknown = await signInPassword('nobody@example.com', 'wrong-password-xxxx')
@@ -227,7 +229,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     expect(wrong.cookies.dmarcscope_mfa).toBeUndefined()
   })
 
-  it('locks an account after repeated failures, even against the right password, and unknown addresses look the same', async () => {
+  it('locks an account after repeated failures, even against the right password, and unknown addresses look the same', { timeout: 30_000 }, async () => {
     await resetLocks()
     for (let i = 0; i < 5; i++) await signInPassword(OWNER, `wrong-${i}-password`, `198.51.100.${40 + i}`)
     const locked = await signInPassword(OWNER, PASSWORD, '198.51.100.50')
@@ -240,7 +242,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     expect((await signInPassword('ghost@example.com', 'anything-at-all-123', '198.51.100.70')).location).toContain('error=locked')
   })
 
-  it('locks a client address after many failures across accounts', async () => {
+  it('locks a client address after many failures across accounts', { timeout: 30_000 }, async () => {
     await resetLocks()
     for (let i = 0; i < 20; i++) await signInPassword(`spray-${i}@example.com`, 'wrong-password-xxxx', '203.0.113.99')
     expect((await signInPassword(OWNER, PASSWORD, '203.0.113.99')).location).toContain('error=locked')
@@ -248,7 +250,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     expect((await signInPassword(OWNER, PASSWORD, '203.0.113.100')).location).toBe(`${BASE}/login?method=password&step=code`)
   })
 
-  it('asks for the second factor, refusing wrong, reused and replayed codes', async () => {
+  it('asks for the second factor, refusing wrong, reused and replayed codes', { timeout: 30_000 }, async () => {
     await resetLocks()
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
@@ -297,7 +299,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     expect(forged.location).toBe(`${BASE}/login?method=password&error=expired`)
   })
 
-  it('accepts each recovery code once', async () => {
+  it('accepts each recovery code once', { timeout: 30_000 }, async () => {
     await resetLocks()
     const a = await signInPassword(OWNER, PASSWORD)
     expect((await signInCode(a.cookies.dmarcscope_mfa, recoveryCodes[0].toUpperCase())).cookies.dmarcscope_session).toBeTruthy()
@@ -306,7 +308,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     expect((await signInCode(b.cookies.dmarcscope_mfa, 'aaaa-bbbb-cccc-dddd')).location).toContain('error=code')
   })
 
-  it('refuses a locked account at the second step too', async () => {
+  it('refuses a locked account at the second step too', { timeout: 30_000 }, async () => {
     await resetLocks()
     const a = await signInPassword(OWNER, PASSWORD)
     for (let i = 0; i < 5; i++) await signInCode(a.cookies.dmarcscope_mfa, '000000')
@@ -315,7 +317,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     expect(locked.cookies.dmarcscope_session).toBeUndefined()
   })
 
-  it('refuses a disabled owner, and their existing session, on the next request', async () => {
+  it('refuses a disabled owner, and their existing session, on the next request', { timeout: 30_000 }, async () => {
     await resetLocks()
     const a = await signInPassword(OWNER, PASSWORD)
     const { authenticate } = await import('@/lib/auth')
