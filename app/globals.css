@@ -1065,3 +1065,118 @@ select:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- people and rules ---------- */
+
+.person-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+.person-row:last-child {
+  border-bottom: none;
+}
+.person-who {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.person-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.8rem;
+  font-size: 0.86rem;
+}
+.filters input,
+.inline-form input {
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 0;
+}
+.filters input[type='search'] {
+  flex: 1 1 12rem;
+}
+.inline-form .grow {
+  flex: 1 1 14rem;
+}
+.filters input:focus-visible,
+.inline-form input:focus-visible,
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.8rem;
+  font-size: 0.88rem;
+}
+.admin-nav {
+  flex-wrap: wrap;
+}
+.admin-nav .count {
+  display: inline-block;
+  margin-left: 0.35rem;
+  min-width: 1.3em;
+  padding: 0 0.35em;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-align: center;
+}
+.kv-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.5rem 1.2rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.kv-list dt {
+  color: var(--text-muted);
+}
+.kv-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.actions-card {
+  display: grid;
+  gap: 0.8rem;
+}
+.notice.confirm {
+  margin-bottom: 0;
+}
+@media (max-width: 520px) {
+  .kv-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
+  }
+  .kv-list dd {
+    margin-bottom: 0.45rem;
+  }
+}
+.date-range {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}

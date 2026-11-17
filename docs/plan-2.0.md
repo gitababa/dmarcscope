@@ -264,6 +264,85 @@ Done when: each action and each guard rail has a test for its refusal; the panel
 with keyboard only and at phone width; an admin who is demoted mid-session loses the panel
 on their next request.
 
+### Design
+
+**Data model (migration `0004`).**
+- `users.invited_at`, `users.invited_by`: an invitation is a `users` row with
+  `status = 'pending'`, `role_source = 'assigned'`, the invited role, and `invited_at` set.
+  A pending row without `invited_at` is a request (someone signed in and no rule admitted
+  them).
+- Indexes for the audit viewer's filters: `audit_log (action, id)`,
+  `audit_log (lower(actor_email), id)`.
+- No new status: rejecting a request sets `status = 'disabled'` (they stay refused, and an
+  administrator can re-enable them later), and the audit log says it was a rejection.
+
+**Who may do what.** Roles rank viewer < admin < owner. All of this needs admin or owner.
+- An actor may change only a user whose role is at or below their own. An admin cannot touch
+  an owner.
+- An actor may grant only a role at or below their own. Only an owner can make an owner.
+- Nobody can disable or remove themselves. Signing yourself out everywhere is allowed.
+- The last active owner cannot be demoted, disabled or removed. "Last" is decided inside the
+  transaction, with the owner rows locked (`FOR UPDATE`), so two owners demoting each other at
+  once cannot leave none.
+- The same rank rules apply to access rules: an admin can add rules for admin or viewer.
+  Rules never grant owner (as in milestone 1).
+
+**Sign-in for invited and approved people.** At the next request after an invitation,
+`resolveAccess` finds the pending, invited row, makes it `active`, and records
+`invitation_accepted`. Approving a request sets the chosen role (`assigned`) and makes the
+row active. Both take effect on that person's next request. Invitations only matter for
+people who sign in through SSO or a proxy. No email is sent: "invite" pre-approves an
+address, and there is no mail delivery until milestone 5.
+
+**Actions** (server actions; each re-checks the caller's role, runs in one transaction with
+the target row locked, writes an audit entry, and writes an audit entry for a refusal too).
+`lib/people.ts` holds the logic, so it can be tested against the database without Next.js.
+
+| Action | Effect | Refused when |
+|---|---|---|
+| invite | new pending row with role, `invited_at` | address invalid or already known; role above caller |
+| approve | pending request → active, chosen role | not a pending request; role above caller |
+| reject | pending request → disabled | not pending |
+| change role | role, `role_source = 'assigned'` | target above caller; role above caller; last owner |
+| disable / enable | status | target above caller; self (disable); last owner (disable) |
+| sign out everywhere | `sessions_valid_after = now()` | target above caller |
+| remove | delete the row (history stays in the audit log) | target above caller; self; last owner |
+| add rule / delete rule | `access_rules` (+ `config_version` bump) | invalid value; duplicate; role above caller |
+
+**Screens** (all admin-only; plain forms that work without JavaScript and with the keyboard
+alone; usable at 375px):
+- `/admin/users`: pending requests first (approve with a role, or reject); then everyone,
+  with search (address or name), filters (status, role, sign-in source) and pages of 50; an
+  invite form.
+- `/admin/users/[id]`: one person: role, status, source, last sign-in, invited by, lockout.
+  Change role, disable or enable, sign out everywhere, remove (with a confirmation step).
+  Only the actions the caller may take are shown. The server checks again anyway.
+- `/admin/rules`: database rules (add, delete) and, read-only, the rules that come from the
+  environment.
+- `/admin/audit`: filters (action, actor, target, from/to date), pages, and "Download CSV"
+  (`GET /admin/audit/export` with the same filters). The export is admin-only, capped at
+  100,000 rows, and recorded in the audit log. Cells that a spreadsheet would read as a
+  formula (`=`, `+`, `-`, `@`, tab, CR) are prefixed with `'`, because the audit log holds text
+  strangers typed.
+
+**Failure cases.** A user changed between page load and submit (role, status, deleted) is
+re-read inside the transaction, so the decision is made on current data. The panel then
+reports "changed meanwhile, see the current state". A demoted admin's next request has the
+lower role (no cache), so the panel is gone. Search input is bound as a parameter, and
+`%`/`_` are escaped for `ILIKE`.
+
+**Built as designed**, plus:
+- An admin cannot delete a rule that grants a role above their own. Rules grant only admin and
+  viewer, so in practice this never refuses anyone today.
+- Every action re-reads the caller's own account inside its transaction. If it was disabled or
+  removed since the request started, the action is refused.
+- Approve and reject also apply the rank rule: a request an owner raised to owner is not an
+  admin's to decide. Enabling a user makes their role `assigned`, so a re-enabled rejected
+  request actually gets in. An invitation lets someone in only if accepting it succeeded;
+  otherwise the current row decides.
+- On a confirmation step, keyboard focus moves to the confirming button. This is a small client
+  component, because React does not apply `autoFocus` to server-rendered HTML.
+
 ## Milestone 3 — Admin panel: SSO
 
 OIDC connection form with presets (Google, Microsoft Entra ID, Okta, Keycloak, generic):

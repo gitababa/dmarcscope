@@ -43,6 +43,18 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
 - `APP_SECRET`, `APP_SECRET_PREVIOUS`, `SETUP_TOKEN`, `SETTINGS_CACHE_SECONDS`,
   `CLIENT_IP_HEADER`.
 
+### Added — milestone 2, people
+
+- **Admin → Users**: pending requests (approve with a role, or reject), search and filters,
+  invitations, and per person: change role, disable and enable, sign out everywhere, remove.
+- **Admin → Access rules**: add and delete email-domain and group rules; the environment's rules
+  are shown read-only.
+- **Admin → Audit log**: filters (action, who, target, dates) and CSV download.
+- Guard rails: an admin cannot change an owner or grant a role above their own; nobody can
+  disable or remove themselves; the last active owner cannot be demoted, disabled or removed.
+  Every change and every refusal is audited.
+- Migration `0004` (invitations, audit log indexes).
+
 ### Changed
 
 - `AUTH_PROVIDER` is optional: unset now means "sign-in managed in the app" instead of a

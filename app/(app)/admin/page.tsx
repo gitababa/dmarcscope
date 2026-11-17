@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { SubmitButton } from '@/components/client'
 import { Pill } from '@/components/ui'
 import { atLeast } from '@/lib/auth/roles'
+import { listPendingRequests } from '@/lib/admin'
 import { requirePageRole } from '@/lib/auth/server'
 import { REGISTRY, type ResolvedSetting, configStore } from '@/lib/settings'
 import { updateSettingAction } from './actions'
@@ -26,7 +27,7 @@ const SOURCE_LABEL: Record<ResolvedSetting['source'], string> = {
 export default async function AdminSettingsPage({ searchParams }: { searchParams: Promise<{ error?: string; saved?: string; key?: string }> }) {
   const access = await requirePageRole('admin')
   const { error, saved, key } = await searchParams
-  const settings = await configStore().list()
+  const [settings, pending] = await Promise.all([configStore().list(), listPendingRequests(access)])
   const broken = settings.filter((s) => s.error)
   // What a valid value looks like, from the registry (never text from the URL).
   const requirement = (() => {
@@ -43,7 +44,7 @@ export default async function AdminSettingsPage({ searchParams }: { searchParams
           <p>Each setting comes from its environment variable if that is set, otherwise from here, otherwise its default.</p>
         </div>
       </div>
-      <AdminNav current="/admin" />
+      <AdminNav current="/admin" pending={pending.length} />
 
       {error && (
         <div className="notice bad" role="alert">

@@ -5,8 +5,9 @@
 //   2. a session issued before the user's sessions_valid_after is refused
 //      (they have to sign in again);
 //   3. the role is the higher of the role assigned to the user (setup wizard,
-//      an administrator, the settings import) and the best role any access
-//      rule gives them now (environment lists and database rules);
+//      an administrator, an invitation, the settings import) and the best role
+//      any access rule gives them now (environment lists and database rules);
+//      an invitation becomes an active user at this first request;
 //   4. no role: a person seen for the first time is recorded as a pending
 //      request an administrator can approve, and refused.
 //
@@ -57,7 +58,8 @@ export async function resolveAccess(
 
   const { rules } = await dir.config()
   const fromRules = ruleRole(identity, env, rules)
-  const assigned = row && row.status === 'active' && row.role_source === 'assigned' ? row.role : null
+  const invited = row?.status === 'pending' && row.role_source === 'assigned' && row.invited_at != null
+  const assigned = row && row.role_source === 'assigned' && (row.status === 'active' || invited) ? row.role : null
   const role = higherRole(assigned, fromRules)
 
   if (!role) {
@@ -85,6 +87,16 @@ export async function resolveAccess(
       actor: { userId: row.id, email: row.email, ip: null },
       target: `user:${row.id}`,
       detail: { role, by: 'access_rule', provider },
+    })
+  } else if (invited) {
+    // Decide on what is stored: if the invitation was disabled or removed
+    // at this moment, start again from the current row.
+    if (!(await dir.acceptInvitation(row.id))) return resolveAccess(identity, provider, facts, env, dir)
+    await dir.audit({
+      action: 'invitation_accepted',
+      actor: { userId: row.id, email: row.email, ip: null },
+      target: `user:${row.id}`,
+      detail: { role: row.role, provider },
     })
   } else if (row.role_source === 'rule' && (row.status === 'pending' || row.role !== fromRules) && fromRules) {
     await dir.syncRuleRole(row.id, fromRules)

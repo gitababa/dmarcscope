@@ -1,12 +1,13 @@
 'use client'
 
-// The only client-side JavaScript in the app: active-tab highlighting and a
-// pending state for form buttons. Everything else is server-rendered.
+// The only client-side JavaScript in the app: active-tab highlighting, a
+// pending state for form buttons, and moving focus to a confirmation.
+// Everything else is server-rendered.
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useFormStatus } from 'react-dom'
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 
 const TABS = [
   { href: '/', label: 'Overview', match: (p: string) => p === '/' || p.startsWith('/domains') },
@@ -40,6 +41,19 @@ export function SubmitButton({
   return (
     <button type="submit" className={className} disabled={pending} aria-busy={pending}>
       {pending && pendingLabel ? pendingLabel : children}
+    </button>
+  )
+}
+
+// A submit button that takes keyboard focus when it appears (a confirmation
+// step), so keyboard users land on the decision. React does not apply
+// autoFocus to server-rendered HTML, hence the effect.
+export function FocusedSubmitButton({ children, className = 'btn' }: { children: ReactNode; className?: string }) {
+  const ref = useRef<HTMLButtonElement>(null)
+  useEffect(() => ref.current?.focus(), [])
+  return (
+    <button ref={ref} type="submit" className={className}>
+      {children}
     </button>
   )
 }

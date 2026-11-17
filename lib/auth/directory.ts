@@ -23,6 +23,9 @@ export type UserRow = {
   status: 'pending' | 'active' | 'disabled'
   source: UserSource
   sessions_valid_after: string | null
+  // Set on an invitation (milestone 2): a pending row with an assigned role
+  // that becomes active at the person's first sign-in.
+  invited_at: string | null
 }
 
 export interface Directory {
@@ -39,10 +42,13 @@ export interface Directory {
   requestAccess(identity: Identity, source: UserSource): Promise<UserRow | null>
   // A rule-admitted person's role changed, or a pending one is now admitted.
   syncRuleRole(id: number, role: Role): Promise<void>
+  // An invited person signed in for the first time. False if the invitation
+  // changed meanwhile (disabled, removed, already accepted).
+  acceptInvitation(id: number): Promise<boolean>
   audit(entry: AuditEntry): Promise<void>
 }
 
-const COLUMNS = 'id, email, name, role, role_source, status, source, sessions_valid_after'
+const COLUMNS = 'id, email, name, role, role_source, status, source, sessions_valid_after, invited_at'
 
 type Row = Omit<UserRow, 'id'> & { id: string | number }
 const toUser = (r: Row | undefined): UserRow | null => (r ? { ...r, id: Number(r.id) } : null)
@@ -97,6 +103,14 @@ export class PgDirectory implements Directory {
       `UPDATE users SET role = $2, status = 'active' WHERE id = $1 AND role_source = 'rule' AND status <> 'disabled'`,
       [id, role]
     )
+  }
+
+  async acceptInvitation(id: number) {
+    const { rowCount } = await this.pool().query(
+      `UPDATE users SET status = 'active' WHERE id = $1 AND status = 'pending' AND invited_at IS NOT NULL AND role_source = 'assigned'`,
+      [id]
+    )
+    return rowCount === 1
   }
 
   async audit(entry: AuditEntry) {
