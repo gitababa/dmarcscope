@@ -178,6 +178,10 @@ anyone can send, so they are shortened, shown on one line and displayed as plain
   not decrypt. `npm run secrets:reencrypt` covers them when rotating `APP_SECRET`
   ([configuration.md](configuration.md#secrets-in-the-database)). It is the only place outside
   the worker that decrypts them, run by an operator, never by the web app.
+- A saved secret is only used where it was entered for: changing a mailbox's kind, server,
+  port, security, account, tenant or application requires entering the secret again. So an
+  administrator cannot point the worker, with someone else's saved password or key, at a server
+  they control or at another user's mailbox.
 - Who can see and change mailboxes and domains: administrators and owners. Every change,
   request and refusal is in the audit log, which records that a secret was set or replaced,
   never its value.

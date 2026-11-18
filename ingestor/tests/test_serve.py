@@ -505,3 +505,28 @@ def test_housekeeping_is_done_by_one_run_at_a_time(db_settings, imap, monkeypatc
     finally:
         holder.close()
         w.close()
+
+
+def test_a_long_run_keeps_its_heartbeat(db_settings, imap, monkeypatch):
+    monkeypatch.setattr(serve, "HEARTBEAT_ALIVE_SECONDS", 0.4)  # beats every 0.1 s
+    imap.messages = {1: report_for("example.com", "r1")}
+    add_domains(db_settings, "example.com")
+    mid = add_mailbox(db_settings, port=imap.port)
+    w = worker(db_settings)
+    seen = []
+
+    def slow(uid):
+        for _ in range(2):
+            with db(db_settings) as c:
+                seen.append(c.execute("SELECT seen_at FROM worker_heartbeats WHERE worker_id = %s", (w.worker_id,)).fetchone()[0])
+            time.sleep(0.3)
+
+    imap.on_fetch = slow
+    try:
+        assert w.run_mailbox(mid, "manual")[0] is True
+    finally:
+        imap.on_fetch = None
+        w.close()
+    assert seen[1] > seen[0]  # updated while the main loop was busy in the run
+    with db(db_settings) as c:
+        assert c.execute("SELECT COUNT(*) FROM worker_heartbeats").fetchone()[0] == 0  # removed on close

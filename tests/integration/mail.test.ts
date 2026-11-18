@@ -102,6 +102,26 @@ describe.skipIf(!TEST_DATABASE_URL)('mail settings in the panel', () => {
     expect(audit.rows.map((r) => r.detail.secret)).toEqual(['kept', 'replaced'])
   })
 
+  it('never lets a saved secret be sent somewhere else without typing it again', async () => {
+    const id = await mail.createMailbox(pool, ADMIN(), imap())
+    for (const over of [{ host: 'imap.attacker.example' }, { port: '994' }, { security: 'starttls', port: '993' }, { username: 'other@example.com' }]) {
+      await expect(mail.updateMailbox(pool, ADMIN(), id, imap({ ...over, secret: '' })), JSON.stringify(over)).rejects.toMatchObject({ code: 'invalid', field: 'secret' })
+    }
+    expect(await mail.getMailbox(pool, id)).toMatchObject({ host: 'imap.example.com', username: 'reports@example.com' })
+    await mail.updateMailbox(pool, ADMIN(), id, imap({ host: 'imap2.example.com', secret: 'retyped' }))
+
+    const key = JSON.stringify({ type: 'service_account', client_email: 'x@p.iam.gserviceaccount.com', private_key: '-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----\n' })
+    const g = await mail.createMailbox(pool, ADMIN(), imap({ kind: 'google', secret: key }))
+    await expect(mail.updateMailbox(pool, ADMIN(), g, imap({ kind: 'google', username: 'ceo@example.com', secret: '' }))).rejects.toMatchObject({ field: 'secret' })
+    await mail.updateMailbox(pool, ADMIN(), g, imap({ kind: 'google', name: 'Renamed', folder: 'Reports', secret: '' })) // harmless changes keep it
+
+    const ms = { kind: 'microsoft', tenantId: 'contoso.onmicrosoft.com', clientId: '11111111-2222-3333-4444-555555555555' }
+    const m = await mail.createMailbox(pool, ADMIN(), imap(ms))
+    await expect(mail.updateMailbox(pool, ADMIN(), m, imap({ ...ms, tenantId: 'fabrikam.onmicrosoft.com', secret: '' }))).rejects.toMatchObject({ field: 'secret' })
+    await expect(mail.updateMailbox(pool, ADMIN(), m, imap({ ...ms, clientId: '99999999-2222-3333-4444-555555555555', secret: '' }))).rejects.toMatchObject({ field: 'secret' })
+    await mail.updateMailbox(pool, ADMIN(), m, imap({ ...ms, intervalMinutes: '120', secret: '' }))
+  })
+
   it('validates every field', async () => {
     const cases: Array<[Partial<import('@/lib/mail').MailboxInput>, string]> = [
       [{ kind: 'pop3' }, 'kind'],

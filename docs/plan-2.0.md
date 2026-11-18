@@ -588,6 +588,11 @@ position, as the plan requires.
 - Microsoft 365 and Google mailboxes always connect to `outlook.office365.com` and
   `imap.gmail.com`. The host is not editable for those kinds, so a token is only ever sent to
   its provider. Token endpoints are constants; a Google key file's `token_uri` is ignored.
+- A saved secret must be typed again whenever the kind, server, port, security, account, tenant
+  or application changes (found by the security review: otherwise an admin could redirect a
+  saved password to their own server, or a Google key to another user's mailbox).
+- The worker sends heartbeats from a thread, so a run longer than two minutes is not taken for
+  a dead worker.
 - Mailboxes and domains are managed by admins and owners; the caller's role is re-read in the
   transaction, as in milestone 2. Every change, request and refusal is audited, and a secret is
   recorded only as `set` / `kept` / `replaced`.

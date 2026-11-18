@@ -21,7 +21,7 @@ export const MAIL_FIELDS: Record<string, string> = {
   username: 'Mailbox address / user name',
   tenant_id: 'Tenant ID (the directory ID, or a domain such as contoso.onmicrosoft.com)',
   client_id: 'Application (client) ID',
-  secret: 'Secret (required for a new mailbox, or when changing its kind; a Google key must be the JSON file of a service account)',
+  secret: 'Secret (required for a new mailbox, and whenever the kind, server, account, tenant or application changes; a Google key must be the JSON file of a service account)',
   folder: 'Folder to read',
   processed_folder: 'Folder for processed reports (different from the folder read)',
   invalid_folder: 'Folder for messages that are not reports (different from the folder read)',
@@ -169,7 +169,7 @@ export function MailboxForm({ kind, mailbox }: { kind: MailboxKind; mailbox?: Ma
           />
         )}
         <div id="secret-hint" className="field-hint">
-          Stored encrypted. Only the worker can read it; this page never shows it again.
+          Stored encrypted. Only the worker can read it; this page never shows it again. Changing the server, account, tenant or application needs it entered again.
           {editing && mailbox.secret_updated_at ? ` Last changed ${new Date(mailbox.secret_updated_at).toISOString().slice(0, 10)}.` : ''}
           {kind === 'microsoft' ? ' Client secrets expire (24 months at most): note the date and replace it in time.' : ''}
         </div>

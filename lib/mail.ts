@@ -360,10 +360,27 @@ export async function createMailbox(db: Pool, actor: MailActor, input: MailboxIn
 
 export async function updateMailbox(db: Pool, actor: MailActor, id: number, input: MailboxInput, env: Env = process.env): Promise<void> {
   await guarded(db, actor, 'mailbox_updated', `mailbox:${id}`, async (c) => {
-    const existing = (await c.query<{ kind: MailboxKind; has_secret: boolean }>(`SELECT kind, secret IS NOT NULL AS has_secret FROM mailboxes WHERE id = $1 FOR UPDATE`, [id])).rows[0]
+    const existing = (
+      await c.query<{ kind: MailboxKind; has_secret: boolean; host: string; port: number; security: string; username: string; tenant_id: string | null; client_id: string | null }>(
+        `SELECT kind, secret IS NOT NULL AS has_secret, host, port, security, username, tenant_id, client_id FROM mailboxes WHERE id = $1 FOR UPDATE`,
+        [id]
+      )
+    ).rows[0]
     if (!existing) throw new MailRefusal('not_found')
-    // A secret belongs to its kind: changing the kind needs a new one.
-    const v = validateMailbox(input, { secretRequired: !existing.has_secret || input.kind !== existing.kind })
+    // A saved secret is only ever used where it was entered for: changing the
+    // kind, server, account, tenant or application needs it typed again.
+    // Otherwise an administrator could point the worker, with the saved
+    // password or key, at a server they control or another user's mailbox.
+    const v = validateMailbox(input, { secretRequired: false })
+    const retargeted =
+      v.kind !== existing.kind ||
+      v.host !== existing.host ||
+      v.port !== Number(existing.port) ||
+      v.security !== existing.security ||
+      v.username !== existing.username ||
+      v.tenantId !== existing.tenant_id ||
+      v.clientId !== existing.client_id
+    if (!input.secret && (!existing.has_secret || retargeted)) throw new MailRefusal('invalid', 'secret')
     await c.query(
       `UPDATE mailboxes SET name = $2, kind = $3, enabled = $4, host = $5, port = $6, security = $7, username = $8, tenant_id = $9,
          client_id = $10, folder = $11, processed_folder = $12, invalid_folder = $13, interval_minutes = $14,

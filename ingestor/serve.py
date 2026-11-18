@@ -118,8 +118,30 @@ class Worker:
         self.lock_conn = store.connect(self.base)
         self.lock_conn.autocommit = True
         store.heartbeat(self.conn, self.worker_id, socket.gethostname(), __version__)
+        # A run can take longer than HEARTBEAT_ALIVE_SECONDS: keep reporting
+        # in from a thread on its own connection, so other workers never take
+        # this one for dead mid-run and fail the request it is working on.
+        self._beating = threading.Event()
+        self._beat_conn = store.connect(self.base)
+        self._beat_conn.autocommit = True
+        self._beat_thread = threading.Thread(target=self._beat, name="heartbeat", daemon=True)
+        self._beat_thread.start()
+
+    def _beat(self) -> None:
+        while not self._beating.wait(HEARTBEAT_ALIVE_SECONDS / 4):
+            try:
+                store.heartbeat(self._beat_conn, self.worker_id, socket.gethostname(), __version__)
+            except Exception:  # noqa: BLE001 - the main loop's heartbeat still runs
+                log.warning("heartbeat failed", exc_info=True)
 
     def close(self) -> None:
+        if getattr(self, "_beat_thread", None) is not None:
+            self._beating.set()
+            self._beat_thread.join(5)
+            try:
+                self._beat_conn.close()
+            except Exception:  # noqa: BLE001
+                pass
         for c in (self.conn,):
             try:
                 if c is not None:
