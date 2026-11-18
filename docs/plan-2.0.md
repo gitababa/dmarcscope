@@ -625,6 +625,179 @@ webhook. Deduplication, quiet periods, a test button, delivery history.
 Alert text is built from report data: escape it for each channel, and never follow
 redirects or call private addresses from a webhook unless an owner allows it.
 
+Done when: an admin, working only in the browser, sets up SMTP and a Slack-compatible webhook,
+creates one rule of each kind, makes each fire from seeded data, and gets exactly one
+notification per event (the next evaluation sends nothing more); an event that clears is closed;
+the test button and the delivery history (including a failure) work; a webhook aimed at
+`127.0.0.1`, `169.254.169.254` or a redirect is refused; hostile report text is neutralized in
+every channel; two web replicas never send the same alert twice; and a deployment with no rules
+makes no outbound connection and behaves exactly as in milestone 4.
+
+### Design
+
+**Where it runs.** In the web app, in TypeScript, because it needs the compliance queries, the DNS
+check results and the settings store, and the worker is optional (Vercel and cron-only installs
+have none).
+- `lib/alerts/` holds the evaluator, the renderers and the senders.
+- **Scheduling:** a timer started from `instrumentation.ts` evaluates every 5 minutes, only where
+  the process is long-running (not when `VERCEL` is set). `GET|POST /api/cron/alerts`, behind the
+  machine token like the other cron endpoints, does the same for serverless and external
+  schedulers.
+- **Leader safety:** one evaluation at a time across all replicas, under a PostgreSQL try-lock.
+  A second one returns at once.
+- **DNS refresh:** while at least one enabled "record changed" rule exists, the in-process timer
+  also refreshes DNS checks once a day (the existing `runAndStoreDnsCheck`). Without it a
+  self-hosted install with no cron would never have anything to compare.
+- Alerts are system-wide, evaluated with the machine scope. Milestone 6 decides who may *see*
+  them per domain.
+
+**Data model (migration `0007`).**
+- `alert_channels`:
+  - `kind`: `email`, `webhook` or `slack`;
+  - `name`, `enabled`;
+  - `config` (JSONB, not secret): the recipient list for email;
+  - `secret`: an encrypted envelope, purpose `alert`, bound to the row. For `slack` it holds the
+    webhook URL; for `webhook`, the URL and the signing secret; for `email`, nothing;
+  - `secret_updated_at`, audit columns.
+- `alert_rules`:
+  - `kind`: `new_failing_source`, `compliance_drop`, `ingest_stale` or `dns_changed`;
+  - `name`, `enabled`;
+  - `domain` (NULL: every monitored domain);
+  - `params` (JSONB, validated per kind);
+  - `quiet_minutes` (60 to 10080, default 1440);
+  - `notify_resolved` (default false);
+  - audit columns.
+- `alert_rule_channels (rule_id, channel_id)`.
+- `alert_events`: one row per condition.
+  - `rule_id`, `dedupe_key`, `domain`;
+  - `state` (`open` or `resolved`), `first_seen_at`, `last_seen_at`, `resolved_at`;
+  - `last_notified_at`, `reminders_sent`;
+  - `summary` and `detail` (JSONB): short, bounded values, stored as data and escaped when
+    rendered.
+  - A partial unique index on `(rule_id, dedupe_key) WHERE state = 'open'` is what makes
+    deduplication a database fact rather than a convention.
+- `alert_deliveries` is the outbox and the history:
+  - `event_id` (NULL for a test), `channel_id`, `kind` (`alert`, `reminder`, `resolved`, `test`);
+  - `status` (`queued`, `sent`, `failed`), `attempts`, `next_attempt_at`;
+  - `error` (short, never a secret or a response body), `created_at`, `finished_at`.
+- Settings: `smtp.host`, `smtp.port`, `smtp.security` (`ssl` or `starttls`; no plaintext option),
+  `smtp.username`, `smtp.password` (secret), `smtp.from`, and `alerts.allow_private_webhooks`
+  (default false). All owner-only, each with an environment variable (`SMTP_*`,
+  `ALERTS_ALLOW_PRIVATE_WEBHOOKS`).
+- Retention: resolved events and their deliveries older than 180 days are deleted by the
+  evaluator.
+
+**Rules.** Missing data is never read as "all fine" or as "everything failed".
+1. **New source failing** (`min_messages` 100, `window_days` 7): a source IP with at least
+   `min_messages` messages failing DMARC for a domain in the window, and no records for that IP
+   and domain before the window. Key: `domain|ip`. It resolves when the IP stops matching (it
+   ages out of "new", or stops failing).
+2. **Compliance dropped** (`threshold_pct` 95, `min_messages` 100, `window_days` 7): the DMARC
+   pass rate over the window is below the threshold with at least `min_messages` messages. Under
+   `min_messages` there is no verdict, not 0%. Key: `domain`. It resolves when the rate is back
+   at or above the threshold.
+3. **Ingest stale:** uses the existing `getIngestHealth` and the `ingest.stale_hours` setting.
+   `never` (fresh install) is not stale. Key: `ingest`.
+4. **Record changed:** the published DMARC or SPF record text differs between the latest two DNS
+   checks of a domain. A lookup that timed out or failed is not a record and is never compared;
+   NXDOMAIN or "no record" is a real value, so a record that disappeared does alert. A domain with
+   one check has nothing to compare. Key: `domain|dmarc|<hash of the new record>`. It is a
+   one-time event: it resolves after the next check that agrees with the new record. Before
+   building, check how a failed lookup is stored in `dns_checks.results`; if it cannot be told
+   apart from "no record", add an explicit marker (the change is made in `lib/dns-checks.ts` and
+   tested).
+
+**Lifecycle.** Each evaluation, per rule, in its own transaction (a failing rule is recorded
+and the others proceed): compute the current conditions, open new events, update `last_seen_at`
+on continuing ones, resolve events whose condition is gone.
+- A new event queues one delivery per channel of its rule.
+- A still-open event gets a reminder after `quiet_minutes`, repeated at the same interval at most
+  3 times, and then goes quiet until it resolves.
+- A resolved event sends one notice only if `notify_resolved`.
+- Evaluating again with nothing changed queues nothing.
+
+**Delivery.** A sender claims queued deliveries with `FOR UPDATE SKIP LOCKED`, so replicas
+cannot send the same one twice, and runs outside the transaction.
+- A failure schedules a retry after 1, 5 and 30 minutes (4 attempts in all), then stays `failed`.
+- A channel that is down never blocks the others.
+- A secret that cannot be decrypted (a rotated `APP_SECRET`) fails the delivery as "secret
+  unreadable" without retrying.
+- A channel deleted or disabled meanwhile cancels its queued deliveries.
+- A deliberate trade-off: a send that succeeded but whose acknowledgement was lost may be
+  repeated, so delivery is at-least-once. The webhook carries a stable `event_id` for receivers
+  to deduplicate on.
+
+**Channels.**
+- **Email:** an SMTP client written on `node:net` / `node:tls`, since the plan prefers what Node
+  ships, with a stand-in server in the tests.
+  - Certificate verification is always on.
+  - It speaks implicit TLS or STARTTLS, with AUTH PLAIN or LOGIN, plain text bodies and dot
+    stuffing.
+  - Every header value is refused if it contains CR or LF.
+  - The subject is RFC 2047 encoded.
+  - Recipients are validated addresses, at most 10 per channel.
+  - Timeouts: 10 s to connect, 30 s in all.
+  - The SMTP server may be on a private address (relays often are); only an owner can set it.
+- **Webhook (signed):** `POST` of a JSON body with:
+  - `X-DMARCscope-Event-Id`;
+  - `X-DMARCscope-Timestamp`;
+  - `X-DMARCscope-Signature: v1=<hex HMAC-SHA256 of "<timestamp>.<body>">`.
+
+  The documentation shows receivers how to verify it and reject old timestamps.
+- **Slack-compatible:** `POST {"text": ...}` with the characters `& < >` escaped as Slack
+  documents, which also neutralizes `<!channel>` and `<http://...|label>`. Not signed.
+- **Outbound request rules (webhook and Slack, applied on every delivery, not only when saved):**
+  - HTTPS only.
+  - Redirects are never followed: any 3xx is a failure.
+  - The hostname is resolved first, and the request is made to *that* address (the lookup is
+    pinned), so a name cannot change its answer between the check and the connection.
+  - Loopback, private, link-local (including `169.254.169.254`), unique-local, CGNAT,
+    multicast, unspecified and IPv4-mapped forms of these are refused. `alerts.allow_private_webhooks`
+    (owner only) lifts the address rule and also permits `http://`.
+  - 10 s timeout; the response body is read to at most 4 KB and never stored or shown.
+  - The saved URL is never sent back to the browser: forms show "set" and the host only.
+
+**Escaping.** An alert is a structured object, not a string; each channel has a renderer.
+- Fields that came from reports (reverse DNS, organization name, envelope-from, domain) are
+  reduced to printable characters and cut to 200.
+- Email: plain text, with CR and LF removed from anything in a header.
+- Webhook: JSON as data.
+- Slack: escaped as above.
+- The panel: React's escaping.
+- Tests feed each renderer `<!channel>`, `\r\nBcc: x@evil`, a 10 000-character name, control
+  characters, and a markdown or Slack link.
+- The web app's `decryptSecret` gains purpose `alert`, used only by the sender, and the test that
+  scans the web sources for decryptions is extended to allow exactly that one place.
+
+**Screens** (admin and owner; the caller's role is re-read in the transaction, as in
+milestone 2).
+- **Admin → Alerts:**
+  - The evaluator's state: last evaluation, last error, next due.
+  - The open events, and the recent ones with their deliveries.
+  - The rules, each with its channels and open count, and a form to add or edit one with
+    kind-specific fields.
+  - The channels, with **Send test** (rate limited to one per channel every 10 seconds), and a
+    delivery history showing failures with their short error.
+- **Admin → Settings:** the SMTP block, and the private-webhook switch, for the owner.
+- Every change, test and refusal is audited; a secret is recorded only as `set` / `kept` /
+  `replaced`. As in milestone 4, changing a channel's kind or recipient host requires typing its
+  secret again.
+
+**Failure cases, all tested.**
+- SMTP: refused, authentication failure, invalid certificate, timeout, a header-injection attempt.
+- Webhook: 4xx, 5xx, timeout, a redirect, a private target, a name that resolves to a private
+  address, an oversized response.
+- A channel deleted meanwhile; a secret that cannot be decrypted.
+- Two evaluators at once; two senders at once.
+- A rule that throws, with the others still evaluated.
+- Hostile report data in every renderer.
+- A DNS lookup failure not read as a record change; no data not read as 0%.
+- A deployment with no rules makes no outbound connection.
+
+**Unverified until a real service is used:** delivery to a real SMTP provider and to Slack /
+Microsoft Teams / Mattermost incoming webhooks. Tests use local stand-ins; the pull request and
+`docs/alerts.md` say so.
+
 ## Milestone 6 — Enterprise access
 
 Per-domain permissions (users or groups limited to chosen domains) through the single
