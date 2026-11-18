@@ -101,7 +101,7 @@ export function MailboxForm({ kind, mailbox }: { kind: MailboxKind; mailbox?: Ma
       <Field id="name" label="Name" value={mailbox?.name ?? (kind === 'imap' ? 'DMARC reports' : `DMARC reports (${KINDS[kind].label.split(' (')[0]})`)} required maxLength={100} />
       {kind === 'imap' ? (
         <>
-          <Field id="host" label="Server" value={mailbox?.host} required maxLength={253} placeholder="imap.example.com" />
+          <Field id="host" label="Server" value={mailbox?.host} required maxLength={253} placeholder="imap.example.com" pattern="[A-Za-z0-9.\-]+" hint="Host name or IPv4 address, without https://." />
           <div className="field">
             <label htmlFor="security">Security</label>
             <select id="security" name="security" defaultValue={mailbox?.security ?? 'ssl'}>

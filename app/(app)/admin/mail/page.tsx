@@ -4,7 +4,7 @@ import { Pill } from '@/components/ui'
 import { listPendingRequests } from '@/lib/admin'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
-import { relTime } from '@/lib/format'
+import { relTime, untilTime } from '@/lib/format'
 import { KINDS, domainsFromEnvironment, isKind, listDomains, listMailboxes, shortError, workerStatus } from '@/lib/mail'
 import { AdminNav } from '../nav'
 import { MAIL_ERRORS, MAIL_FIELDS, MailboxForm, WorkerNotice, runState } from './form'
@@ -59,9 +59,13 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
         <div className="section-head">
           <h2 id="mailboxes-head">Mailboxes</h2>
         </div>
-        <div className="card" style={{ marginBottom: '0.8rem' }}>
-          <WorkerNotice alive={worker.alive} lastSeen={worker.lastSeen} />
-        </div>
+        {worker.alive > 0 ? (
+          <div className="card" style={{ marginBottom: '0.8rem' }}>
+            <WorkerNotice alive={worker.alive} lastSeen={worker.lastSeen} />
+          </div>
+        ) : (
+          <WorkerNotice alive={0} lastSeen={worker.lastSeen} />
+        )}
         <div className="card flush" role="list" aria-label="Mailboxes">
           {mailboxes.length === 0 && (
             <div className="person-row muted">
@@ -83,7 +87,7 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
                   </div>
                   <div className="source-meta">
                     {m.last_run ? `Last run ${relTime(m.last_run.started_at)}` : 'Never run'}
-                    {m.enabled && m.next_run_at ? ` · next ${new Date(m.next_run_at).getTime() <= Date.now() ? 'when a worker is free' : relTime(m.next_run_at)}` : ''}
+                    {m.enabled && m.next_run_at ? ` · next ${new Date(m.next_run_at).getTime() <= Date.now() ? 'when a worker is free' : untilTime(m.next_run_at)}` : ''}
                   </div>
                   {lastError && <div className="tone-bad small">{shortError(lastError, 160)}</div>}
                 </div>

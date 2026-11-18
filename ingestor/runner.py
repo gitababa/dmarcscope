@@ -120,8 +120,10 @@ def run_ingest(
     mailbox_id: int | None = None,
     trigger: str = "environment",
     should_stop: Callable[[], bool] = lambda: False,
+    housekeeping: bool = True,
 ) -> dict:
-    """Drain the mailbox, apply retention, backfill reverse DNS. Without
+    """Drain the mailbox, apply retention, backfill reverse DNS (only with
+    `housekeeping`: serve mode lets one run at a time do those). Without
     mailbox_id: the mailbox configured in the environment (the scheduled job
     of 1.1.0). With it: a mailbox configured in the panel (serve mode), which
     refuses to ingest while no monitored domain is configured."""
@@ -151,7 +153,8 @@ def run_ingest(
                     "no monitored domains are configured: add the domains you monitor under Admin → Domains "
                     "(or set ALLOWED_DOMAINS) before reports are read"
                 )
-            stats["purged"] = store.apply_retention(conn, settings)
+            if housekeeping:
+                stats["purged"] = store.apply_retention(conn, settings)
 
             def handle(raw: bytes) -> str:
                 try:
@@ -174,7 +177,8 @@ def run_ingest(
             failed = False
 
             try:
-                stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds)
+                if housekeeping:
+                    stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds)
             except Exception as e:  # noqa: BLE001 - enrichment is best-effort
                 log.exception("reverse-DNS enrichment failed")
                 stats["errors"].append({"error": f"enrichment: {type(e).__name__}: {e}"})

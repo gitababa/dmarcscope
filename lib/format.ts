@@ -50,6 +50,19 @@ export function relTime(iso: string | null | undefined): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
+// A time to come: "in 45m", "in 3h"; one already passed is "now".
+export function untilTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const diff = new Date(iso).getTime() - Date.now()
+  if (Number.isNaN(diff)) return '—'
+  const mins = Math.ceil(diff / 60000)
+  if (mins <= 0) return 'now'
+  if (mins < 60) return `in ${mins}m`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `in ${hours}h`
+  return `in ${Math.round(hours / 24)}d`
+}
+
 // reject = enforced, quarantine = partly enforced, none = monitoring only.
 export function policyTone(policy: string | null | undefined): 'ok' | 'info' | 'warn' | 'muted' {
   if (policy === 'reject') return 'ok'

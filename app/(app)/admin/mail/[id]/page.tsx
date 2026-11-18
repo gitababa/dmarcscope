@@ -6,7 +6,7 @@ import { Pill } from '@/components/ui'
 import { listPendingRequests } from '@/lib/admin'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
-import { fmtDate, relTime } from '@/lib/format'
+import { fmtDate, relTime, untilTime } from '@/lib/format'
 import { KINDS, type JobRow, type RunRow, getMailbox, isKind, listJobs, listRuns, shortError, workerStatus } from '@/lib/mail'
 import { deleteMailboxAction, requestRunAction, requestTestAction, toggleMailboxAction } from '../../mail-actions'
 import { AdminNav } from '../../nav'
@@ -57,7 +57,7 @@ function RunLine({ r }: { r: RunRow }) {
           {fmtDate(r.started_at)} <span className="muted small">{relTime(r.started_at)} · {r.trigger === 'manual' ? 'run now' : 'scheduled'}</span>
         </div>
         <div className="source-meta">
-          {r.messages_fetched} message(s) read, {r.reports_parsed} new report(s), {r.reports_skipped} skipped
+          {r.messages_fetched} message(s) read, {r.reports_parsed} new report(s), {r.reports_skipped} set aside (duplicates, other domains, not reports)
           {errors.length ? `, ${errors.length} problem(s)` : ''}
         </div>
         {errors.length > 0 && (
@@ -146,7 +146,7 @@ export default async function MailboxPage({
             <dd>
               {mailbox.enabled ? `every ${mailbox.interval_minutes} minutes` : 'paused'}
               {mailbox.enabled && mailbox.next_run_at
-                ? ` · next ${new Date(mailbox.next_run_at).getTime() <= Date.now() ? 'when a worker is free' : relTime(mailbox.next_run_at)}`
+                ? ` · next ${new Date(mailbox.next_run_at).getTime() <= Date.now() ? 'when a worker is free' : untilTime(mailbox.next_run_at)}`
                 : ''}
             </dd>
             <dt>{KINDS[mailbox.kind].secretLabel}</dt>

@@ -56,6 +56,11 @@ and the mailbox and database credentials it is configured with.
   from `APP_SECRET` with HKDF, one per purpose, and bound to the record they belong to. A value
   that cannot be decrypted is an error, never a fallback. Saved secrets are never sent to the
   browser, logged or written to the audit log.
+- Mailbox passwords, client secrets and service-account keys saved in the panel can be decrypted
+  only by the ingest worker; the web app encrypts them and has no path that decrypts them.
+  OAuth tokens are only sent to the provider's own IMAP server, and token endpoints are fixed in
+  code. A Google service-account key with domain-wide delegation can read every mailbox in the
+  domain: see [docs/mail.md](docs/mail.md) for how to limit it.
 - The audit log is append-only: the application has no update or delete path and a database
   trigger refuses both.
 

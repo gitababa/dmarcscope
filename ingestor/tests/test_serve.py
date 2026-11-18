@@ -483,3 +483,25 @@ def test_the_database_lost_mid_run(db_settings, imap):
     first, second = runs(db_settings, mid)
     assert first[:2] == (True, True) and first[3] == 1 and "database connection lost" in json.dumps(first[4])
     assert second[:2] == (False, True) and second[3] == 2
+
+
+def test_housekeeping_is_done_by_one_run_at_a_time(db_settings, imap, monkeypatch):
+    calls = []
+    monkeypatch.setattr(store, "apply_retention", lambda conn, settings: calls.append("retention") or 0)
+    from ingestor import enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_ip_metadata", lambda conn, budget: calls.append("enrich") or 0)
+    add_domains(db_settings, "example.com")
+    mid = add_mailbox(db_settings, port=imap.port)
+    holder, w = worker(db_settings), worker(db_settings)
+    try:
+        assert store.try_lock_housekeeping(holder.lock_conn)  # another worker is busy with it
+        assert w.run_mailbox(mid, "manual")[0] is True
+        assert calls == []
+        store.unlock_housekeeping(holder.lock_conn)
+        assert w.run_mailbox(mid, "manual")[0] is True
+        assert calls == ["retention", "enrich"]
+        assert store.try_lock_housekeeping(holder.lock_conn)  # released after the run
+    finally:
+        holder.close()
+        w.close()

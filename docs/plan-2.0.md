@@ -584,6 +584,32 @@ position, as the plan requires.
 - A job for a mailbox that was deleted meanwhile.
 - No monitored domains.
 
+**Built as designed, plus:**
+- Microsoft 365 and Google mailboxes always connect to `outlook.office365.com` and
+  `imap.gmail.com`. The host is not editable for those kinds, so a token is only ever sent to
+  its provider. Token endpoints are constants; a Google key file's `token_uri` is ignored.
+- Mailboxes and domains are managed by admins and owners; the caller's role is re-read in the
+  transaction, as in milestone 2. Every change, request and refusal is audited, and a secret is
+  recorded only as `set` / `kept` / `replaced`.
+- The web app's `decryptSecret` refuses any purpose but `setting` and `totp`, and a test scans
+  the web sources for a decryption of `mailbox`. `secrets:reencrypt` is the one exception, run
+  by an operator. It now covers mailbox secrets and the SSO client secret, which it had missed
+  since milestone 3.
+- One waiting request of each kind per mailbox: asking again while one waits returns that one.
+  Requests a worker took and never finished are failed once it has sent no heartbeat for two
+  minutes.
+- Retention and reverse-DNS backfill in `serve` run in whichever run holds the global
+  housekeeping lock; other runs only read their mailbox.
+- `RETENTION_DAYS=0` in the environment still means "keep forever", as in 1.1.0, and wins over
+  the panel.
+- IMAP mailboxes may point at private addresses, since self-hosted mail servers often live
+  there. Folder names are limited to letters, digits, spaces and `. _ - / [ ] & +`.
+- Docker Compose runs `serve` under a `serve` profile, so a 1.1 setup without `APP_SECRET` starts
+  exactly as before.
+- Verified locally against a TLS IMAP stand-in and local token endpoints, including a real
+  `serve` process killed with `SIGKILL` mid-run. **Microsoft 365 and Google are unverified
+  against real tenants.**
+
 ## Milestone 5 — Alerting
 
 Rules: a new source failing DMARC above a volume threshold; compliance for a domain

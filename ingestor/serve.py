@@ -10,7 +10,9 @@ Any number of workers can run. A run of a mailbox holds a session advisory
 lock for it on the worker's lock connection, so one mailbox is never read by
 two runs at once; if a worker dies, its lock disappears with its connection,
 and the next holder closes the orphaned run as failed before starting.
-Jobs are claimed with FOR UPDATE SKIP LOCKED.
+Jobs are claimed with FOR UPDATE SKIP LOCKED. Retention and reverse-DNS
+backfill are done by one run at a time (a global try-lock); a run that does
+not get it reads its mailbox and leaves them to the next.
 
 SIGTERM / SIGINT: the current message is finished, the run is closed as
 failed ("interrupted"; the rest is retried next time), locks are released.
@@ -198,16 +200,25 @@ class Worker:
             except MailboxConfigError as e:
                 self._record_refused_run(mailbox_id, trigger, str(e))
                 return False, str(e)
+            # Retention and reverse-DNS backfill are global: one run at a
+            # time does them, whichever holds the housekeeping lock.
+            housekeeping = store.try_lock_housekeeping(self.lock_conn)
             try:
-                stats = run_ingest(settings, mailbox_id=mailbox_id, trigger=trigger, should_stop=self.stop.is_set)
+                stats = run_ingest(settings, mailbox_id=mailbox_id, trigger=trigger, should_stop=self.stop.is_set, housekeeping=housekeeping)
             except Exception as e:  # noqa: BLE001 - the run row records it; the loop goes on
                 log.warning("run of mailbox %s failed: %s", mailbox_id, _describe(e))
                 return False, _describe(e)
+            finally:
+                if housekeeping:
+                    try:
+                        store.unlock_housekeeping(self.lock_conn)
+                    except Exception:  # noqa: BLE001 - released with the connection anyway
+                        pass
             if stats.get("already_running"):
                 return False, "A run of this mailbox is already in progress."
             return True, (
-                f"Read {stats['fetched']} message(s): {stats['stored']} new report(s), {stats['skipped']} skipped, "
-                f"{stats['invalid']} not reports, {len(stats['errors'])} error(s)."
+                f"Read {stats['fetched']} message(s): {stats['stored']} new report(s), {stats['skipped']} duplicate(s) or "
+                f"other domains, {stats['invalid']} not report(s), {len(stats['errors'])} problem(s)."
             )
         finally:
             try:
