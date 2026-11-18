@@ -36,7 +36,7 @@ Two small components share one database:
 | Component | What it is | How it runs |
 |---|---|---|
 | Web app | Next.js dashboard | a container or Node process, behind your TLS / proxy |
-| Ingest worker | `python -m ingestor run` | a scheduled one-shot job (daily is enough) |
+| Ingest worker | `python -m ingestor serve` | a long-running process reading the mailboxes set up in the app (or `run`, a scheduled one-shot job for a mailbox in the environment) |
 
 ## Try it in five minutes
 
@@ -59,7 +59,8 @@ anyone else can reach it.)
 ## Set it up for real
 
 1. **Create a mailbox for reports** (for example `dmarc-reports@yourdomain.com`) that can be
-   read over IMAP with a password or app password.
+   read over IMAP: with a password or app password, or as Microsoft 365 or Google Workspace
+   through OAuth (see [docs/mail.md](docs/mail.md)).
 2. **Ask for reports.** For each domain, publish a TXT record at `_dmarc.<domain>`:
 
    ```
@@ -69,13 +70,14 @@ anyone else can reach it.)
    `p=none` only monitors. If the mailbox is on a different domain than the one being
    monitored, the mailbox's domain must also publish
    `<monitored-domain>._report._dmarc.<mailbox-domain>  TXT  "v=DMARC1"`.
-3. **Deploy** the web app, the database and the scheduled ingest job. `DATABASE_URL`, `APP_URL`
+3. **Deploy** the web app, the database and the ingest worker. `DATABASE_URL`, `APP_URL`
    and `APP_SECRET` are enough to start: the app then serves a setup wizard that creates the owner
    account — see [docs/deployment.md](docs/deployment.md) (Docker Compose, Kubernetes, Google
    Cloud Run, Vercel) and the deployment guide's upgrade notes when coming from 1.1.
 4. **Choose how people sign in** — see [docs/authentication.md](docs/authentication.md).
-5. **Configure** the mailbox, retention and access lists —
-   see [docs/configuration.md](docs/configuration.md).
+5. **Configure** the mailbox and monitored domains under Admin → Mail and Admin → Domains
+   ([docs/mail.md](docs/mail.md)), and retention and the rest under Admin → Settings or in the
+   environment ([docs/configuration.md](docs/configuration.md)).
 
 Reports usually start arriving 24–48 hours after the DNS record goes live, and domains appear
 on the dashboard automatically.
@@ -111,9 +113,9 @@ schemas in it.
 
 - Only **aggregate** (RUA) reports are stored. Failure (RUF) reports contain message samples
   with personal data and are deliberately skipped, as are SMTP TLS reports.
-- The mailbox is read over **IMAP with a password**. Mailboxes that only allow OAuth
-  (Microsoft 365 with basic authentication disabled) are not supported directly; forward
-  reports to a mailbox that is, or load report files with `python -m ingestor import`.
+- Mailboxes are read over **IMAP**: with a password, or through OAuth for Microsoft 365 and
+  Google Workspace. The two OAuth paths have so far been tested only against local stand-ins,
+  not real tenants ([docs/mail.md](docs/mail.md)).
 - DKIM has no discovery mechanism, so DNS checks probe the selectors seen in your reports plus
   a few common defaults.
 - One organization per deployment: everyone with access sees all domains.

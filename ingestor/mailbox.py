@@ -49,8 +49,37 @@ def _connect(settings: Settings) -> imaplib.IMAP4:
         imap.starttls(ssl_context=context)
     else:
         imap = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port, ssl_context=context, timeout=TIMEOUT_SECONDS)
-    imap.login(settings.imap_user, settings.imap_password)
+    try:
+        if settings.imap_xoauth2 is not None:
+            response = settings.imap_xoauth2()
+            imap.authenticate("XOAUTH2", lambda _challenge: response)
+        else:
+            imap.login(settings.imap_user, settings.imap_password)
+    except BaseException:
+        try:
+            imap.logout()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     return imap
+
+
+def check(settings: Settings) -> str:
+    """Sign in and open the folder: the panel's "Test connection". Returns a
+    one-line description of what was found."""
+    imap = _connect(settings)
+    try:
+        typ, _ = imap.select(_quote(settings.imap_folder), readonly=True)
+        if typ != "OK":
+            raise RuntimeError(f"cannot open folder {settings.imap_folder!r}")
+        typ, data = imap.uid("SEARCH", None, "UNSEEN")
+        unseen = len(data[0].split()) if typ == "OK" and data and data[0] else 0
+        return f"Signed in; folder {settings.imap_folder!r} has {unseen} unread message(s)."
+    finally:
+        try:
+            imap.logout()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _ensure_folder(imap: imaplib.IMAP4, folder: str) -> None:
@@ -86,9 +115,20 @@ def _message_bytes(msg_data: list) -> bytes | None:
     return None
 
 
-def drain(settings: Settings, handle: Handler, stats: dict, deadline: float) -> None:
+class Interrupted(AbortRun):
+    """The worker was asked to stop: the run ends after the current message."""
+
+
+def drain(
+    settings: Settings,
+    handle: Handler,
+    stats: dict,
+    deadline: float,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> None:
     """Process unseen messages until the mailbox is empty, the message cap is
-    reached, or the time budget runs out. Updates `stats` in place."""
+    reached, or the time budget runs out. Updates `stats` in place.
+    `should_stop` is checked between messages (graceful shutdown)."""
     settings.require_imap()
     imap = _connect(settings)
     try:
@@ -123,6 +163,8 @@ def drain(settings: Settings, handle: Handler, stats: dict, deadline: float) -> 
             uids.reverse()
 
             for uid in uids:
+                if should_stop():
+                    raise Interrupted("interrupted: the worker is shutting down")
                 if time.monotonic() > deadline or stats["fetched"] >= settings.max_messages:
                     break
                 attempted.add(uid)

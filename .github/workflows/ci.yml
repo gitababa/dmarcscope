@@ -118,6 +118,10 @@ jobs:
         run: docker run --rm dmarcscope-ingest --version
       - name: Ingest image can decrypt secrets saved by the web app
         run: docker run --rm --entrypoint python dmarcscope-ingest -c "from ingestor.crypto import decrypt, encrypt; s='x'*32; assert decrypt(secrets=[s], purpose='setting', context='k', envelope=encrypt(secret=s, purpose='setting', context='k', plaintext='ok')).plaintext == 'ok'"
+      - name: Ingest image refuses serve mode without APP_SECRET
+        run: |
+          code=0; docker run --rm -e DATABASE_URL=postgresql://x:y@127.0.0.1:1/z dmarcscope-ingest serve || code=$?
+          test "$code" = 2
       - name: Web image ships its command-line scripts
         run: |
           # Without DATABASE_URL each exits 2 (configuration error) once its
@@ -153,6 +157,20 @@ jobs:
           docker compose up -d
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/api/healthz >/dev/null && break; sleep 2; done
           curl -sf http://127.0.0.1:3000/api/healthz
+      # The worker for mailboxes set up in the panel: starts under its compose
+      # profile, reports in, and stops cleanly on docker compose stop.
+      - name: Serve-mode worker under its compose profile
+        run: |
+          echo "APP_SECRET=ci-only-app-secret-0123456789-abcdefghijkl" >> .env
+          docker compose --profile serve up -d worker
+          for i in $(seq 1 30); do
+            n=$(docker compose exec -T db psql -U dmarcscope -d dmarcscope -Atc 'SELECT COUNT(*) FROM worker_heartbeats')
+            [ "$n" = 1 ] && break; sleep 2
+          done
+          test "$n" = 1
+          docker compose --profile serve stop worker
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose --profile serve ps -aq worker)")" = 0
+          test "$(docker compose exec -T db psql -U dmarcscope -d dmarcscope -Atc 'SELECT COUNT(*) FROM worker_heartbeats')" = 0
       - name: Compose logs
         if: failure()
         run: docker compose logs --no-color | tail -200

@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     imp = sub.add_parser("import", help="load report files (.xml, .gz, .zip, .eml) or directories of them")
     imp.add_argument("paths", nargs="+")
     sub.add_parser("enrich", help="backfill reverse DNS for sending IPs")
+    sub.add_parser("serve", help="keep running: read the mailboxes configured in the panel on their schedule")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -37,13 +38,19 @@ def main(argv: list[str] | None = None) -> int:
     def _terminate(signum, frame):  # noqa: ARG001
         raise SystemExit(143)
 
-    try:
-        signal.signal(signal.SIGTERM, _terminate)
-    except ValueError:
-        pass  # not the main thread (embedded use); nothing to install
+    # serve installs its own handlers (stop after the current message).
+    if args.command != "serve":
+        try:
+            signal.signal(signal.SIGTERM, _terminate)
+        except ValueError:
+            pass  # not the main thread (embedded use); nothing to install
 
     try:
         settings = load_settings()
+        if args.command == "serve":
+            from . import serve
+
+            return serve.serve(settings)
         # Imported late so that --help works without the parser's dependencies.
         from . import runner
 

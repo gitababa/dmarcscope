@@ -464,6 +464,157 @@ environment variables; credentials are never readable through the web app; killi
 worker mid-run leaves a closed, failed run and the next run proceeds; an environment-
 configured 1.1.0 worker still runs unchanged.
 
+### Research: unattended access to a shared mailbox (done before building)
+
+**Microsoft 365.** Use the OAuth 2.0 **client-credentials grant** with the **`IMAP.AccessAsApp`**
+application permission of *Office 365 Exchange Online*. Setup:
+1. Grant tenant admin consent.
+2. Register the app's service principal in Exchange with `New-ServicePrincipal`.
+3. Allow it into the reports mailbox, and only that mailbox, with
+   `Add-MailboxPermission -AccessRights FullAccess`.
+
+The token is requested with scope `https://outlook.office365.com/.default`. IMAP authenticates with
+SASL `XOAUTH2` (`user=<mailbox>^Aauth=Bearer <token>^A^A`), naming the shared mailbox as the user.
+Chosen over Microsoft Graph `Mail.Read` because Graph's application permission is tenant-wide
+until narrowed by RBAC for Applications (Application Access Policies are legacy), whereas
+mailbox permissions scope IMAP access to one mailbox by construction. Client secrets last at most
+24 months (Microsoft recommends under 12), so the panel shows the secret's age.
+Sources:
+- [Authenticate an IMAP, POP or SMTP connection using OAuth](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth)
+- [Role Based Access Control for Applications in Exchange Online](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)
+- [Application Access Policies (legacy)](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-access-policies)
+- [Add and manage app credentials](https://learn.microsoft.com/en-us/entra/identity-platform/how-to-add-credentials)
+
+**Google Workspace.** Use a **service account with domain-wide delegation**. A Workspace super
+admin authorizes its client ID for the scope `https://mail.google.com/` in the Admin console. The
+worker signs an RS256 JWT:
+- `iss` = the service account,
+- `sub` = the reports mailbox,
+- `aud` = `https://oauth2.googleapis.com/token`,
+- `exp` at most one hour after `iat`.
+
+It exchanges the JWT with the `urn:ietf:params:oauth:grant-type:jwt-bearer` grant and logs in to
+IMAP with `XOAUTH2`. Domain-wide delegation lets the key act as *any* user of the domain for that
+scope, so the documentation asks for a dedicated service account used only here, with no other
+scopes, and treats the key as the most sensitive secret in the deployment. (The narrower
+`gmail.imap_admin` scope is for admin access and is not needed.) The JWT is signed with
+`cryptography`, which the worker already depends on, rather than adding Google's client
+libraries; the token exchange is tested against a mock endpoint that verifies the signature.
+Sources:
+- [Using OAuth 2.0 for Server to Server Applications](https://developers.google.com/identity/protocols/oauth2/service-account)
+- [IMAP, POP, and SMTP: OAuth 2.0 mechanism (XOAUTH2)](https://developers.google.com/workspace/gmail/imap/xoauth2-protocol)
+
+**Not verified without a real tenant.** Everything above is tested against local stand-ins
+(a TLS IMAP server and token endpoints). Until the owner provides a Microsoft 365 and a Google
+Workspace tenant, both providers are labelled *unverified* in the pull request and in
+`docs/mail.md`.
+
+### Design
+
+**Data model (migration `0006`).**
+- `mailboxes`:
+  - `kind`: `imap` (password), `microsoft` or `google`;
+  - `name`, `enabled`;
+  - connection details: `host`, `port`, `security`, `username`, `folder`, `processed_folder`,
+    `invalid_folder`;
+  - provider IDs: `tenant_id`, `client_id`;
+  - `secret`: the password, client secret or service-account key as an encrypted envelope,
+    purpose `mailbox`, bound to the row;
+  - `secret_updated_at`;
+  - `interval_minutes` (15 to 1440, default 60);
+  - audit columns.
+- `monitored_domains (name, created_by, created_at)`. This replaces `ALLOWED_DOMAINS`, which,
+  when set, still wins and makes the list read-only.
+- `ingest_runs` gains `mailbox_id` (NULL for environment-configured runs and imports) and
+  `trigger` (`schedule`, `manual`, `environment`).
+- `worker_jobs`:
+  - `kind`: `test` or `run`;
+  - `mailbox_id`;
+  - `status`: `queued`, `running`, `done`, `failed`;
+  - `requested_by`, `requested_at`, `claimed_by`, `claimed_at`, `finished_at`;
+  - `result` (JSONB: a short outcome and message, never a secret).
+- `worker_heartbeats (worker_id, hostname, version, started_at, seen_at)`, so the panel can say
+  whether a worker is running.
+- Setting `ingest.retention_days` (`RETENTION_DAYS`), read by the worker with the same
+  resolution: environment, then database, then default.
+
+**Credentials are never readable through the web app.** The web app encrypts mailbox secrets
+and stores them; it has no code path that decrypts purpose `mailbox` (a test asserts it). Forms
+show "set" or "not set" and take a replacement. Only the worker decrypts, from its own network
+position, as the plan requires.
+
+**Worker `serve` mode** (`python -m ingestor serve`):
+- **Loop:** every few seconds it writes a heartbeat, claims queued jobs
+  (`FOR UPDATE SKIP LOCKED`), and runs every enabled mailbox whose interval has passed since its
+  last scheduled run.
+- **One active run per mailbox:** a run holds a PostgreSQL session advisory lock for that mailbox
+  (`pg_try_advisory_lock`). The lock disappears with the worker's connection, so a run row left
+  open by a killed worker is recognized by the next lock holder and closed as failed
+  (`interrupted`) before the new run starts.
+- **Several workers:** any number may run. Mailboxes and jobs are shared out by the locks, never
+  run twice. Retention and reverse-DNS enrichment run under one global try-lock.
+- **Graceful shutdown:** SIGTERM finishes the current message, closes the run as failed
+  (`interrupted`, so the next run retries what is left), releases the locks and exits 0.
+- **No domains, no ingest:** a mailbox configured in the panel will not ingest while no monitored
+  domain is configured (and `ALLOWED_DOMAINS` is unset). The run fails with a message saying
+  so, rather than accepting reports about any domain.
+- **Unchanged:** `run`, `import` and `enrich`, their JSON and exit codes, and the Vercel adapter
+  keep working from the environment as documented. They also pick up panel-configured monitored
+  domains and retention unless the environment sets them.
+
+**Screens** (admin):
+- **Admin → Mail**: the mailboxes, each with its state (last run, next run, last error) and
+  whether a worker is alive. Add or edit a mailbox with kind-specific fields. **Test
+  connection** and **Run now** queue a job; the page shows "waiting for the worker" until it
+  finishes.
+- **Run history** for a mailbox: each run's counts and its per-message errors. That text comes
+  from strangers' emails, so it is escaped and shortened.
+- **Admin → Domains**: monitored domains (add, remove). `ALLOWED_DOMAINS` is shown read-only when
+  set.
+- Retention is on the settings page.
+
+**Failure cases, all tested.**
+- Wrong password or credentials.
+- Token endpoint refusing.
+- Mailbox unreachable.
+- A message that is not a report, or one that fails to store.
+- The database lost mid-run.
+- The worker killed mid-run: an orphaned run is closed and the next run proceeds.
+- Two workers at once.
+- A job for a mailbox that was deleted meanwhile.
+- No monitored domains.
+
+**Built as designed, plus:**
+- Microsoft 365 and Google mailboxes always connect to `outlook.office365.com` and
+  `imap.gmail.com`. The host is not editable for those kinds, so a token is only ever sent to
+  its provider. Token endpoints are constants; a Google key file's `token_uri` is ignored.
+- A saved secret must be typed again whenever the kind, server, port, security, account, tenant
+  or application changes (found by the security review: otherwise an admin could redirect a
+  saved password to their own server, or a Google key to another user's mailbox).
+- The worker sends heartbeats from a thread, so a run longer than two minutes is not taken for
+  a dead worker.
+- Mailboxes and domains are managed by admins and owners; the caller's role is re-read in the
+  transaction, as in milestone 2. Every change, request and refusal is audited, and a secret is
+  recorded only as `set` / `kept` / `replaced`.
+- The web app's `decryptSecret` refuses any purpose but `setting` and `totp`, and a test scans
+  the web sources for a decryption of `mailbox`. `secrets:reencrypt` is the one exception, run
+  by an operator. It now covers mailbox secrets and the SSO client secret, which it had missed
+  since milestone 3.
+- One waiting request of each kind per mailbox: asking again while one waits returns that one.
+  Requests a worker took and never finished are failed once it has sent no heartbeat for two
+  minutes.
+- Retention and reverse-DNS backfill in `serve` run in whichever run holds the global
+  housekeeping lock; other runs only read their mailbox.
+- `RETENTION_DAYS=0` in the environment still means "keep forever", as in 1.1.0, and wins over
+  the panel.
+- IMAP mailboxes may point at private addresses, since self-hosted mail servers often live
+  there. Folder names are limited to letters, digits, spaces and `. _ - / [ ] & +`.
+- Docker Compose runs `serve` under a `serve` profile, so a 1.1 setup without `APP_SECRET` starts
+  exactly as before.
+- Verified locally against a TLS IMAP stand-in and local token endpoints, including a real
+  `serve` process killed with `SIGKILL` mid-run. **Microsoft 365 and Google are unverified
+  against real tenants.**
+
 ## Milestone 5 — Alerting
 
 Rules: a new source failing DMARC above a volume threshold; compliance for a domain

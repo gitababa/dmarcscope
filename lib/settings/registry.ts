@@ -91,6 +91,23 @@ const SETTINGS: SettingDef[] = [
     },
   },
   {
+    key: 'ingest.retention_days',
+    label: 'Keep reports for (days)',
+    description:
+      'Reports older than this are deleted by the worker (1 to 36500). Unset: reports are kept forever. RETENTION_DAYS=0 in the environment also means forever.',
+    type: 'int',
+    env: 'RETENTION_DAYS',
+    default: null,
+    ownerOnly: false,
+    parse: intParser(1, 36500),
+    parseEnv(raw) {
+      // As the worker reads it: 0 means keep forever; negative is an error.
+      const text = raw.trim()
+      if (!/^\d+$/.test(text)) return { ok: false, error: 'must be a whole number, 0 for forever' }
+      return { ok: true, value: Number(text) }
+    },
+  },
+  {
     key: 'session.max_age_hours',
     label: 'Session length (hours)',
     description: 'How long a sign-in lasts (1 to 168).',
@@ -150,6 +167,7 @@ export const REGISTRY: ReadonlyMap<string, SettingDef> = new Map(SETTINGS.map((s
 export type SettingKey =
   | 'app.name'
   | 'ingest.stale_hours'
+  | 'ingest.retention_days'
   | 'session.max_age_hours'
   | 'auth.local_signin_non_owners'
   | 'auth.enforce_sso'

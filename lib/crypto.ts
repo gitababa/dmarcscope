@@ -32,7 +32,14 @@ function secretsForDecryption(env: Env): string[] {
   return out
 }
 
+// Purposes the web app may both encrypt and decrypt. 'mailbox' is not one of
+// them: mailbox credentials are encrypted here (encryptMailboxSecret) and
+// decrypted only by the worker, so they are never readable through the web app.
 export type SecretPurpose = 'setting' | 'totp'
+
+export function encryptMailboxSecret(context: string, plaintext: string, env: Env = process.env): string {
+  return encrypt({ secret: appSecret(env), purpose: 'mailbox', context, plaintext })
+}
 
 export function encryptSecret(purpose: SecretPurpose, context: string, plaintext: string, env: Env = process.env): string {
   return encrypt({ secret: appSecret(env), purpose, context, plaintext })
@@ -46,6 +53,7 @@ export function decryptSecret(
   envelope: string,
   env: Env = process.env
 ): { plaintext: string; rotated: boolean } {
+  if (purpose !== 'setting' && purpose !== 'totp') throw new Error(`purpose ${String(purpose)} cannot be decrypted by the web app`)
   const { plaintext, keyIndex } = decrypt({ secrets: secretsForDecryption(env), purpose, context, envelope })
   return { plaintext, rotated: keyIndex > 0 }
 }

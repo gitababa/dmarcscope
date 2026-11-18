@@ -6,7 +6,8 @@ DMARCscope is three things, and they can run anywhere:
 |---|---|---|
 | PostgreSQL 13+ | any managed or self-hosted instance | UTF-8 database |
 | Web app | `Dockerfile` → `node server.js`, port 3000 | stateless; scale horizontally |
-| Ingest worker | `Dockerfile.ingest` → `python -m ingestor run` | one-shot job; schedule it (daily is enough) |
+| Ingest worker | `Dockerfile.ingest` → `python -m ingestor serve` | long-running; reads the mailboxes set up in the panel ([mail.md](mail.md)) |
+| or, as in 1.1 | `Dockerfile.ingest` → `python -m ingestor run` | one-shot job for the mailbox in `IMAP_*`; schedule it (daily is enough) |
 
 Plus two one-off or scheduled calls:
 
@@ -41,7 +42,21 @@ This runs PostgreSQL, applies migrations, and serves the dashboard on `127.0.0.1
 TLS reverse proxy (Caddy, nginx, Traefik) on the same host in front of it. To publish the port
 on another address or port, set `WEB_BIND` / `WEB_PORT` in `.env`.
 
-Schedule the jobs from the host's crontab:
+### The worker in serve mode
+
+To read mailboxes set up in the browser (Admin → Mail), start the long-running worker as well.
+It needs `APP_SECRET` in `.env`, the same one the web app uses:
+
+```bash
+docker compose --profile serve up -d
+```
+
+It stops cleanly on `docker compose stop` (it finishes the message in hand). It is a separate
+profile so that a 1.1 setup without `APP_SECRET` keeps starting exactly as before.
+
+### Scheduled jobs
+
+With the mailbox in `IMAP_*` (1.1 style), schedule the jobs from the host's crontab:
 
 ```cron
 0 6 * * *   cd /opt/dmarcscope && docker compose run --rm ingest
@@ -179,8 +194,9 @@ Nothing in the environment has to change.
 
 1. Back up the database.
 2. Run the migrations with the new image (`node scripts/migrate.mjs`). Migrations `0003` to
-   `0005` only add tables, columns and indexes (users, settings, access rules, audit log, setup
-   tokens, invitations, single sign-on connections); they change no existing data.
+   `0006` only add tables, columns and indexes (users, settings, access rules, audit log, setup
+   tokens, invitations, single sign-on connections, mailboxes, monitored domains, worker
+   requests and heartbeats, and two columns on `ingest_runs`); they change no existing data.
 3. Deploy the new web image with the **same environment**. Sign-in, the access lists, the
    machine endpoints and the dashboards behave exactly as before, and existing sessions stay
    valid. People who sign in from now on are recorded in the users table, and the request gate
@@ -192,11 +208,17 @@ Nothing in the environment has to change.
      [authentication.md](authentication.md#first-run-the-setup-wizard));
    - run `node scripts/settings-import.mjs` to copy `ADMIN_EMAILS`, `ALLOWED_EMAILS`,
      `ALLOWED_EMAIL_DOMAINS`, `ADMIN_GROUPS` and `ALLOWED_GROUPS` into the database, after which
-     those variables can be removed.
+     those variables can be removed;
+   - move the mailbox into the panel: add the domains from `ALLOWED_DOMAINS` under Admin →
+     Domains, add the mailbox under Admin → Mail, run `python -m ingestor serve` instead of the
+     scheduled `run`, then remove `ALLOWED_DOMAINS` and `IMAP_*` ([mail.md](mail.md)). The
+     scheduled `run` keeps working unchanged if you leave it.
 
 Rolling back to 1.1.x after step 3 works: 1.1.x ignores the new tables.
 
 ### Starting fresh with 2.0
 
 Set `DATABASE_URL`, `APP_URL` and `APP_SECRET`, run the migrations and start the web app. Its log
-prints a one-time setup token; open `/setup` and create the owner account.
+prints a one-time setup token; open `/setup` and create the owner account. Then start the worker
+with `python -m ingestor serve` (same `DATABASE_URL` and `APP_SECRET`), add your domains under
+Admin → Domains and your reports mailbox under Admin → Mail.

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 import psycopg
 
@@ -83,22 +86,61 @@ def _store_parsed(conn, parsed: dict, settings: Settings, stats: dict) -> None:
         stats["skipped"] += 1
 
 
-def run_ingest(settings: Settings) -> dict:
-    """The scheduled job: drain the mailbox, apply retention, backfill reverse DNS."""
+RETENTION_KEY = "ingest.retention_days"
+
+
+def with_panel_settings(conn, settings: Settings) -> Settings:
+    """Monitored domains and retention saved in the panel, where the
+    environment does not set them (the environment always wins)."""
+    if settings.allowed_domains is None:
+        domains = store.db_monitored_domains(conn)
+        if domains:
+            settings = replace(settings, allowed_domains=domains)
+    # RETENTION_DAYS=0 in the environment means "keep forever" and still wins.
+    if settings.retention_days is None and not (os.environ.get("RETENTION_DAYS") or "").strip():
+        raw = store.db_setting(conn, RETENTION_KEY)
+        if raw is not None:
+            # Same rule as the panel (lib/settings/registry.ts): a whole number
+            # of days, 1 to 36500. Anything else is an error, and nothing is
+            # purged on the strength of it.
+            if isinstance(raw, int) and not isinstance(raw, bool) and 1 <= raw <= 36500:
+                settings = replace(settings, retention_days=raw)
+            else:
+                log.error("setting %s saved in the panel is invalid; no reports are purged until it is fixed", RETENTION_KEY)
+    return settings
+
+
+class RunRefused(Exception):
+    """The run cannot proceed for a reason the administrator must fix."""
+
+
+def run_ingest(
+    settings: Settings,
+    *,
+    mailbox_id: int | None = None,
+    trigger: str = "environment",
+    should_stop: Callable[[], bool] = lambda: False,
+    housekeeping: bool = True,
+) -> dict:
+    """Drain the mailbox, apply retention, backfill reverse DNS (only with
+    `housekeeping`: serve mode lets one run at a time do those). Without
+    mailbox_id: the mailbox configured in the environment (the scheduled job
+    of 1.1.0). With it: a mailbox configured in the panel (serve mode), which
+    refuses to ingest while no monitored domain is configured."""
     settings.require_imap()
     stats = _new_stats()
     start = time.monotonic()
 
-    if settings.allowed_domains is None:
-        log.warning(
-            "ALLOWED_DOMAINS is not set: a report about ANY domain that reaches the mailbox will be stored and "
-            "shown, and anyone can email one. Set ALLOWED_DOMAINS to the domains you monitor."
-        )
-
     conn = store.connect(settings)
     try:
+        settings = with_panel_settings(conn, settings)
+        if settings.allowed_domains is None and mailbox_id is None:
+            log.warning(
+                "ALLOWED_DOMAINS is not set: a report about ANY domain that reaches the mailbox will be stored and "
+                "shown, and anyone can email one. Set ALLOWED_DOMAINS to the domains you monitor."
+            )
         stale_after = max(900, 2 * (settings.mail_budget_seconds + settings.enrich_budget_seconds))
-        run_id = store.start_run(conn, stale_after)
+        run_id = store.start_run(conn, stale_after, mailbox_id=mailbox_id, trigger=trigger)
         if run_id is None:
             log.warning("another ingest run is in progress; exiting")
             stats["already_running"] = True
@@ -106,7 +148,13 @@ def run_ingest(settings: Settings) -> dict:
 
         failed = True  # until the mailbox phase completes
         try:
-            stats["purged"] = store.apply_retention(conn, settings)
+            if mailbox_id is not None and settings.allowed_domains is None:
+                raise RunRefused(
+                    "no monitored domains are configured: add the domains you monitor under Admin → Domains "
+                    "(or set ALLOWED_DOMAINS) before reports are read"
+                )
+            if housekeeping:
+                stats["purged"] = store.apply_retention(conn, settings)
 
             def handle(raw: bytes) -> str:
                 try:
@@ -125,14 +173,21 @@ def run_ingest(settings: Settings) -> dict:
                     raise
                 return "done"
 
-            mailbox.drain(settings, handle, stats, deadline=start + settings.mail_budget_seconds)
+            mailbox.drain(settings, handle, stats, deadline=start + settings.mail_budget_seconds, should_stop=should_stop)
             failed = False
 
             try:
-                stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds)
+                if housekeeping:
+                    stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds)
             except Exception as e:  # noqa: BLE001 - enrichment is best-effort
                 log.exception("reverse-DNS enrichment failed")
                 stats["errors"].append({"error": f"enrichment: {type(e).__name__}: {e}"})
+        except mailbox.Interrupted as e:
+            stats["errors"].append({"error": str(e)})
+            raise
+        except RunRefused as e:
+            stats["errors"].append({"error": str(e)})
+            raise
         except Exception as e:  # noqa: BLE001 - record the failure on the run, then re-raise
             stats["errors"].append({"error": f"fatal: {type(e).__name__}: {e}"})
             raise
@@ -169,6 +224,7 @@ def import_files(settings: Settings, paths: list[str]) -> dict:
     stats = _new_stats()
     conn = store.connect(settings)
     try:
+        settings = with_panel_settings(conn, settings)
         for path in _iter_files(paths):
             stats["fetched"] += 1
             try:
