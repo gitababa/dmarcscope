@@ -6,6 +6,10 @@
       "schedule": "0 6 * * *"
     },
     {
+      "path": "/api/cron/alerts",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/dns-check",
       "schedule": "30 6 * * *"
     }
