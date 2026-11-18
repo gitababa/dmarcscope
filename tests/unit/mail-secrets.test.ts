@@ -46,3 +46,20 @@ describe('mailbox secrets in the web app', () => {
     expect(crypto).toMatch(/export function encryptMailboxSecret[^}]*encrypt\(\{ secret: appSecret\(env\), purpose: 'mailbox'/)
   })
 })
+
+// Alert channel secrets (webhook URLs, signing secrets) are decrypted in one
+// place: the sender. Everything else only encrypts and shows "set".
+describe('alert channel secrets in the web app', () => {
+  const sources = DIRS.flatMap(files).filter((f) => !ALLOWED.has(f))
+
+  it('decrypts purpose alert only in lib/alerts/deliver.ts', () => {
+    const offenders = sources.filter((f) => /decryptSecret\(\s*['"`]alert['"`]/.test(readFileSync(path.join(ROOT, f), 'utf8')))
+    expect(offenders).toEqual(['lib/alerts/deliver.ts'])
+  })
+
+  it('never sends a saved address or secret to the browser', () => {
+    const admin = readFileSync(path.join(ROOT, 'lib/alerts/admin.ts'), 'utf8')
+    const listing = admin.slice(admin.indexOf('export async function listChannels'), admin.indexOf('export async function listRules'))
+    expect(listing).not.toMatch(/\bc\.secret\b(?! IS NOT NULL)/)
+  })
+})

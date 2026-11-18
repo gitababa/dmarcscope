@@ -50,6 +50,9 @@ async function main() {
     for (const row of (await client.query(`SELECT id, secret FROM mailboxes WHERE secret IS NOT NULL FOR UPDATE`)).rows) {
       records.push({ name: `mailbox ${row.id} secret`, purpose: 'mailbox', context: `mailbox:${row.id}`, envelope: row.secret, table: 'mailboxes', id: row.id })
     }
+    for (const row of (await client.query(`SELECT id, secret FROM alert_channels WHERE secret IS NOT NULL FOR UPDATE`)).rows) {
+      records.push({ name: `alert channel ${row.id} secret`, purpose: 'alert', context: `alert:${row.id}`, envelope: row.secret, table: 'alert_channels', id: row.id })
+    }
 
     const updates = []
     for (const r of records) {
@@ -74,6 +77,7 @@ async function main() {
       if (u.table === 'settings') await client.query(`UPDATE settings SET value = $2::jsonb, updated_at = NOW() WHERE key = $1`, [u.id, JSON.stringify(u.envelope)])
       else if (u.table === 'users') await client.query(`UPDATE users SET totp_secret = $2 WHERE id = $1`, [u.id, u.envelope])
       else if (u.table === 'sso_connections') await client.query(`UPDATE sso_connections SET client_secret = $2 WHERE id = $1`, [u.id, u.envelope])
+      else if (u.table === 'alert_channels') await client.query(`UPDATE alert_channels SET secret = $2 WHERE id = $1`, [u.id, u.envelope])
       else await client.query(`UPDATE mailboxes SET secret = $2 WHERE id = $1`, [u.id, u.envelope])
     }
     summary.reencrypted = updates.length

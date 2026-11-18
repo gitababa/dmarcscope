@@ -84,6 +84,28 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
 - Migration `0006` (`mailboxes`, `monitored_domains`, `worker_jobs`, `worker_heartbeats`;
   `ingest_runs.mailbox_id` and `trigger`).
 
+### Added — milestone 5, alerting
+
+- **Admin → Alerts:** rules for a new source failing DMARC above a volume threshold, compliance
+  for a domain dropping below a threshold, ingest going stale, and a published DMARC or SPF record
+  changing. Channels: email (SMTP settings in Admin → Settings, owner-only; TLS always, certificate
+  always verified), a signed webhook (HMAC-SHA256 over `timestamp.body`) and Slack-compatible
+  webhooks. See [docs/alerts.md](docs/alerts.md).
+- Deduplication (one open event per condition, enforced by a unique index), quiet periods with up
+  to three reminders, optional "cleared" notices, a **Send test** button and a delivery history
+  with retries (1, 5, 30 minutes) and short errors.
+- Evaluated every five minutes by the web app where it runs as a long-running process, and by
+  `GET|POST /api/cron/alerts` (bearer token) on serverless deployments; one evaluation at a time
+  across replicas.
+- Webhook addresses and signing secrets are stored encrypted (purpose `alert`) and never shown
+  again; `secrets:reencrypt` covers them. Outbound requests refuse private, loopback and
+  link-local destinations, redirects and non-https addresses unless the owner allows it, on every
+  delivery, and connect to the address they validated.
+- DNS checks now record `lookup_failed` for a DMARC or SPF lookup that timed out, so a timeout is
+  never mistaken for a record that was removed.
+- Upgrading from the previous 2.0 milestone: run the migrations (`0007`). With no rules nothing
+  changes and nothing is sent.
+
 ### Security
 
 - Required claims (`OIDC_REQUIRED_CLAIMS`, and those of a panel connection) must be in the signed ID

@@ -12,4 +12,7 @@ export async function register() {
   } catch (err) {
     console.error('[setup] could not check for a setup token at startup:', err instanceof Error ? err.message : String(err))
   }
+  // Alert rules are evaluated on a timer in long-running processes.
+  const { startAlertTimer } = await import('./lib/alerts/run')
+  startAlertTimer()
 }

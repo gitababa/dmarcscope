@@ -18,6 +18,9 @@ Plus two one-off or scheduled calls:
   `Authorization: Bearer $CRON_SECRET` refreshes the DNS health of every domain, which keeps
   the SPF attribution on the Issues page current.
 
+- **Alerts** (serverless only) — `GET /api/cron/alerts` with the same bearer token every five
+  minutes evaluates the alert rules and sends what is due ([alerts.md](alerts.md)). A
+  long-running web app does this itself on a timer.
 - **Ingest monitoring** (recommended) — `GET /api/cron/status` with the same bearer token
   answers `200` while an ingest run has completed in the last `INGEST_STALE_HOURS` (default
   36) and `503` otherwise. The dashboard keeps working on old data when the job stops, so
