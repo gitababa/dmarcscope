@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -95,7 +96,8 @@ def with_panel_settings(conn, settings: Settings) -> Settings:
         domains = store.db_monitored_domains(conn)
         if domains:
             settings = replace(settings, allowed_domains=domains)
-    if settings.retention_days is None:
+    # RETENTION_DAYS=0 in the environment means "keep forever" and still wins.
+    if settings.retention_days is None and not (os.environ.get("RETENTION_DAYS") or "").strip():
         raw = store.db_setting(conn, RETENTION_KEY)
         if raw is not None:
             # Same rule as the panel (lib/settings/registry.ts): a whole number

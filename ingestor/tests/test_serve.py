@@ -416,5 +416,70 @@ def test_environment_runs_pick_up_panel_domains_and_retention(db_settings, monke
         with db(db_settings) as c:
             c.execute("""UPDATE settings SET value = '"forever"' WHERE key = 'ingest.retention_days'""")
         assert runner.with_panel_settings(conn, db_settings).retention_days is None  # invalid: nothing purged
+        with db(db_settings) as c:
+            c.execute("""UPDATE settings SET value = '30' WHERE key = 'ingest.retention_days'""")
+        monkeypatch.setenv("RETENTION_DAYS", "0")  # the environment says forever, and wins
+        assert runner.with_panel_settings(conn, db_settings).retention_days is None
     finally:
         conn.close()
+
+
+def test_an_unreachable_mailbox_is_a_failed_run_and_the_worker_goes_on(db_settings, imap):
+    import socket as _socket
+
+    s = _socket.socket()
+    s.bind(("127.0.0.1", 0))
+    closed_port = s.getsockname()[1]
+    s.close()  # nothing listens there now
+    add_domains(db_settings, "example.com")
+    down = add_mailbox(db_settings, port=closed_port)
+    imap.messages = {1: report_for("example.com", "r1")}
+    up = add_mailbox(db_settings, port=imap.port)
+    w = worker(db_settings)
+    try:
+        w.tick()  # both are due: the first fails, the second still runs
+    finally:
+        w.close()
+    [(failed, finished, _, _, errors)] = runs(db_settings, down)
+    assert failed and finished and "ConnectionRefused" in json.dumps(errors)
+    assert runs(db_settings, up)[0][0] is False and reports(db_settings) == ["example.com"]
+
+
+def test_the_database_lost_mid_run(db_settings, imap):
+    imap.messages = {1: report_for("example.com", "r1"), 2: report_for("example.com", "r2"), 3: report_for("example.com", "r3")}
+    add_domains(db_settings, "example.com")
+    mid = add_mailbox(db_settings, port=imap.port)
+    calls = []
+
+    def cut(uid):
+        calls.append(uid)
+        if len(calls) == 2:
+            # Every connection of the run itself (not the test's, not the
+            # worker's lock connection) is cut, as by a database restart.
+            with db(db_settings) as c:
+                c.execute(
+                    """SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                       WHERE datname = current_database() AND pid <> pg_backend_pid()
+                         AND query NOT ILIKE '%%advisory%%' AND application_name = ''"""
+                )
+
+    imap.on_fetch = cut
+    w = worker(db_settings)
+    try:
+        outcome = w.run_mailbox(mid, "manual")
+    finally:
+        imap.on_fetch = None
+        w.close()
+    assert outcome is not None and outcome[0] is False and "database connection lost" in outcome[1]
+    # Only the message stored before the cut was marked read: the rest is retried.
+    assert len(imap.seen) == 1
+
+    w2 = worker(db_settings)
+    try:
+        ok, _ = w2.run_mailbox(mid, "manual")
+    finally:
+        w2.close()
+    assert ok and len(reports(db_settings)) == 3
+    first, second = runs(db_settings, mid)
+    assert first[:2] == (True, True) and first[3] == 1 and "database connection lost" in json.dumps(first[4])
+    assert second[:2] == (False, True) and second[3] == 2
