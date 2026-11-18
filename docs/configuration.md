@@ -32,10 +32,12 @@ is fixed the setting uses its default, or, for a secret, counts as not set.
 | Password sign-in for non-owners | `AUTH_LOCAL_SIGNIN_NON_OWNERS` | off | owner |
 | Require single sign-on (while a connection is active) | `AUTH_ENFORCE_SSO` | off | owner |
 | Machine endpoint token (secret) | `CRON_SECRET` | — (endpoints closed) | owner |
+| SMTP server, port, encryption, user name, password (secret), sender address (alerts) | `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_SECURITY` (`starttls` or `ssl`), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | — (email channels cannot send) | owner |
+| Allow alerts to private addresses | `ALERTS_ALLOW_PRIVATE_WEBHOOKS` | off | owner |
 
 The single sign-on connection itself is configured under **Admin → Sign-in** ([sso.md](sso.md)).
 Reports mailboxes and monitored domains are configured under **Admin → Mail** and **Admin →
-Domains** ([mail.md](mail.md)). Alerting moves into the panel in a later 2.0 milestone.
+Domains** ([mail.md](mail.md)). Alert rules and channels are under **Admin → Alerts** ([alerts.md](alerts.md)).
 
 ### Secrets in the database
 

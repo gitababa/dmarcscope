@@ -56,6 +56,23 @@ const boolParser = (raw: unknown): Parsed<boolean> => {
   return { ok: false, error: 'must be true or false' }
 }
 
+const oneOf = (allowed: string[]) => (raw: unknown): Parsed<string> => {
+  const s = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return allowed.includes(s) ? { ok: true, value: s } : { ok: false, error: `must be one of: ${allowed.join(', ')}` }
+}
+
+const plainText = (max: number) => (raw: unknown): Parsed<string> => {
+  const s = typeof raw === 'string' ? raw : ''
+  if (s === '' || s.length > max || /[\x00-\x1f\x7f]/.test(s)) return { ok: false, error: `must be 1 to ${max} printable characters` }
+  return { ok: true, value: s }
+}
+
+const hostParser = (raw: unknown): Parsed<string> => {
+  const s = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(s)) return { ok: false, error: 'must be a host name' }
+  return { ok: true, value: s }
+}
+
 const SETTINGS: SettingDef[] = [
   {
     key: 'app.name',
@@ -160,6 +177,90 @@ const SETTINGS: SettingDef[] = [
       return this.parse(raw)
     },
   },
+  {
+    key: 'smtp.host',
+    label: 'SMTP server',
+    description: 'Host name of the mail server alert emails are sent through. Unset: email channels cannot send.',
+    type: 'string',
+    env: 'SMTP_HOST',
+    default: null,
+    ownerOnly: true,
+    parse: hostParser,
+    parseEnv: hostParser,
+  },
+  {
+    key: 'smtp.port',
+    label: 'SMTP port',
+    description: 'Usually 465 (implicit TLS) or 587 (STARTTLS).',
+    type: 'int',
+    env: 'SMTP_PORT',
+    default: 587,
+    ownerOnly: true,
+    parse: intParser(1, 65535),
+    parseEnv: intParser(1, 65535),
+  },
+  {
+    key: 'smtp.security',
+    label: 'SMTP encryption',
+    description: '"ssl" for implicit TLS or "starttls". There is no unencrypted option; the server certificate is always verified.',
+    type: 'string',
+    env: 'SMTP_SECURITY',
+    default: 'starttls',
+    ownerOnly: true,
+    parse: oneOf(['ssl', 'starttls']),
+    parseEnv: oneOf(['ssl', 'starttls']),
+  },
+  {
+    key: 'smtp.username',
+    label: 'SMTP user name',
+    description: 'Leave empty if the server needs no sign-in.',
+    type: 'string',
+    env: 'SMTP_USERNAME',
+    default: null,
+    ownerOnly: true,
+    parse: plainText(254),
+    parseEnv: plainText(254),
+  },
+  {
+    key: 'smtp.password',
+    label: 'SMTP password',
+    description: 'Stored encrypted and never shown again.',
+    type: 'secret',
+    env: 'SMTP_PASSWORD',
+    default: null,
+    ownerOnly: true,
+    parse: plainText(512),
+    parseEnv: plainText(512),
+  },
+  {
+    key: 'smtp.from',
+    label: 'Alert sender address',
+    description: 'The From address of alert emails, for example alerts@example.com.',
+    type: 'string',
+    env: 'SMTP_FROM',
+    default: null,
+    ownerOnly: true,
+    parse(raw) {
+      const s = typeof raw === 'string' ? raw.trim() : ''
+      if (!/^[^\s@"<>()\\,;:]{1,64}@[A-Za-z0-9.-]{1,253}$/.test(s)) return { ok: false, error: 'must be an email address' }
+      return { ok: true, value: s }
+    },
+    parseEnv(raw) {
+      return this.parse(raw)
+    },
+  },
+  {
+    key: 'alerts.allow_private_webhooks',
+    label: 'Allow alerts to private addresses',
+    description:
+      'Lets webhook and Slack-compatible channels point at private, loopback and link-local addresses, and use http://. Off by default so a channel cannot be used to reach internal services.',
+    type: 'bool',
+    env: 'ALERTS_ALLOW_PRIVATE_WEBHOOKS',
+    default: false,
+    ownerOnly: true,
+    parse: boolParser,
+    parseEnv: boolParser,
+  },
 ]
 
 export const REGISTRY: ReadonlyMap<string, SettingDef> = new Map(SETTINGS.map((s) => [s.key, s]))
@@ -172,7 +273,14 @@ export type SettingKey =
   | 'auth.local_signin_non_owners'
   | 'auth.enforce_sso'
   | 'cron.secret'
-export type SecretSettingKey = 'cron.secret'
+  | 'smtp.host'
+  | 'smtp.port'
+  | 'smtp.security'
+  | 'smtp.username'
+  | 'smtp.password'
+  | 'smtp.from'
+  | 'alerts.allow_private_webhooks'
+export type SecretSettingKey = 'cron.secret' | 'smtp.password'
 export type PlainSettingKey = Exclude<SettingKey, SecretSettingKey>
 
 export function settingDef(key: string): SettingDef {

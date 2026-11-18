@@ -7,6 +7,7 @@ const LINKS = [
   { href: '/admin/sso', label: 'Sign-in' },
   { href: '/admin/mail', label: 'Mail' },
   { href: '/admin/domains', label: 'Domains' },
+  { href: '/admin/alerts', label: 'Alerts' },
   { href: '/admin/audit', label: 'Audit log' },
 ]
 

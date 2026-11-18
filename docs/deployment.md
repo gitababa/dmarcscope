@@ -18,6 +18,9 @@ Plus two one-off or scheduled calls:
   `Authorization: Bearer $CRON_SECRET` refreshes the DNS health of every domain, which keeps
   the SPF attribution on the Issues page current.
 
+- **Alerts** (serverless only) — `GET /api/cron/alerts` with the same bearer token every five
+  minutes evaluates the alert rules and sends what is due ([alerts.md](alerts.md)). A
+  long-running web app does this itself on a timer.
 - **Ingest monitoring** (recommended) — `GET /api/cron/status` with the same bearer token
   answers `200` while an ingest run has completed in the last `INGEST_STALE_HOURS` (default
   36) and `503` otherwise. The dashboard keeps working on old data when the job stops, so
@@ -175,6 +178,10 @@ a Python function (`api/cron/ingest.py`) triggered by the crons in `vercel.json`
 Keep `CRON_SECRET` in Vercel's environment even though the owner can also set a machine endpoint
 token in the panel: Vercel Cron sends the environment variable, and the Python ingest function
 reads its configuration from the environment only.
+
+The shipped crons are daily (ingest 06:00, DNS checks 06:30, alerts 07:00 UTC), which is what
+the Hobby plan allows. For faster alert evaluation see [alerts.md](alerts.md). With a Neon
+database from the Vercel integration, use the unpooled connection string for migrations.
 
 Vercel functions have a hard time limit, so the function variant of the ingest job defaults
 to a 170-second mailbox budget per run; a large backlog is worked through over several runs.
