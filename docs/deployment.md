@@ -179,6 +179,10 @@ Keep `CRON_SECRET` in Vercel's environment even though the owner can also set a 
 token in the panel: Vercel Cron sends the environment variable, and the Python ingest function
 reads its configuration from the environment only.
 
+The shipped crons are daily (ingest 06:00, DNS checks 06:30, alerts 07:00 UTC), which is what
+the Hobby plan allows. For faster alert evaluation see [alerts.md](alerts.md). With a Neon
+database from the Vercel integration, use the unpooled connection string for migrations.
+
 Vercel functions have a hard time limit, so the function variant of the ingest job defaults
 to a 170-second mailbox budget per run; a large backlog is worked through over several runs.
 

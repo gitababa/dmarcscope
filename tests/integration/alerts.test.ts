@@ -287,7 +287,7 @@ describe.skipIf(!TEST_DATABASE_URL)('alerts', () => {
       const ts = h.headers['x-dmarcscope-timestamp'] as string
       expect(h.headers['x-dmarcscope-signature']).toBe(`v1=${createHmac('sha256', SIGNING).update(`${ts}.${h.body}`).digest('hex')}`)
       expect(h.headers['x-dmarcscope-event-id']).toBe(String((await events())[0].id))
-      expect(JSON.parse(h.body)).toMatchObject({ type: 'alert', rule: { kind: 'ingest_stale' }, event_id: (await events())[0].id })
+      expect(JSON.parse(h.body)).toMatchObject({ type: 'alert', rule: { kind: 'ingest_stale' }, event_id: Number((await events())[0].id) })
       expect((await deliveries())[0]).toMatchObject({ status: 'sent', attempts: 1, error: null })
     })
 

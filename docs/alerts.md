@@ -14,6 +14,10 @@ an **event**: one notification when it opens, optionally one when it clears.
   long-running process (Docker, a VM, Kubernetes). On a serverless deployment (Vercel) there is
   no such process; call `GET /api/cron/alerts` with `Authorization: Bearer $CRON_SECRET` every five
   minutes instead. Running both is harmless: one evaluation runs at a time across all replicas.
+  `vercel.json` ships a daily schedule (07:00 UTC, after ingest and the DNS checks) because
+  Vercel's Hobby plan only allows daily crons and rejects a deployment with anything faster.
+  On Pro, change it to `*/5 * * * *`; on Hobby, call the endpoint from an external scheduler
+  every five minutes. Until then a rule can take up to a day to fire.
 - **No duplicates.** While a condition holds there is one open event. Evaluating again sends
   nothing. A condition that comes back after it cleared is a new event.
 - **Quiet period.** An event still open after the rule's quiet period (default 24 hours) is sent
