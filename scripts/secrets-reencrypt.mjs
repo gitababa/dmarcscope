@@ -42,6 +42,14 @@ async function main() {
     for (const row of (await client.query(`SELECT id, totp_secret FROM users WHERE totp_secret IS NOT NULL FOR UPDATE`)).rows) {
       records.push({ name: `user ${row.id} TOTP secret`, purpose: 'totp', context: `user:${row.id}`, envelope: row.totp_secret, table: 'users', id: row.id })
     }
+    for (const row of (await client.query(`SELECT id, client_secret FROM sso_connections WHERE client_secret IS NOT NULL FOR UPDATE`)).rows) {
+      records.push({ name: `SSO connection ${row.id} client secret`, purpose: 'setting', context: `sso:${row.id}`, envelope: row.client_secret, table: 'sso_connections', id: row.id })
+    }
+    // Mailbox secrets are only ever decrypted by the worker; rotation is the
+    // one place this script reads them, to write them back under the new key.
+    for (const row of (await client.query(`SELECT id, secret FROM mailboxes WHERE secret IS NOT NULL FOR UPDATE`)).rows) {
+      records.push({ name: `mailbox ${row.id} secret`, purpose: 'mailbox', context: `mailbox:${row.id}`, envelope: row.secret, table: 'mailboxes', id: row.id })
+    }
 
     const updates = []
     for (const r of records) {
@@ -64,7 +72,9 @@ async function main() {
     }
     for (const u of updates) {
       if (u.table === 'settings') await client.query(`UPDATE settings SET value = $2::jsonb, updated_at = NOW() WHERE key = $1`, [u.id, JSON.stringify(u.envelope)])
-      else await client.query(`UPDATE users SET totp_secret = $2 WHERE id = $1`, [u.id, u.envelope])
+      else if (u.table === 'users') await client.query(`UPDATE users SET totp_secret = $2 WHERE id = $1`, [u.id, u.envelope])
+      else if (u.table === 'sso_connections') await client.query(`UPDATE sso_connections SET client_secret = $2 WHERE id = $1`, [u.id, u.envelope])
+      else await client.query(`UPDATE mailboxes SET secret = $2 WHERE id = $1`, [u.id, u.envelope])
     }
     summary.reencrypted = updates.length
     if (updates.length > 0) {

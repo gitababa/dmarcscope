@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { encrypt } from '@/lib/envelope.mjs'
+import { decrypt, encrypt } from '@/lib/envelope.mjs'
 import { TEST_DATABASE_URL, createSchema } from '../helpers/db'
 
 const run = promisify(execFile)
@@ -88,17 +88,33 @@ describe.skipIf(!TEST_DATABASE_URL)('operator commands', () => {
       ownerId,
       encrypt({ secret: OLD, purpose: 'totp', context: `user:${ownerId}`, plaintext: 'JBSWY3DPEHPK3PXP' }),
     ])
+    const sso = (await db.admin.query(`INSERT INTO sso_connections (state, preset, issuer, client_id) VALUES ('draft', 'generic', 'https://idp.example', 'c') RETURNING id`)).rows[0].id
+    await db.admin.query(`UPDATE sso_connections SET client_secret = $2 WHERE id = $1`, [
+      sso,
+      encrypt({ secret: OLD, purpose: 'setting', context: `sso:${sso}`, plaintext: 'rotation-canary-sso' }),
+    ])
+    const mbx = (await db.admin.query(`INSERT INTO mailboxes (name, kind, host, port, security, username) VALUES ('m', 'imap', 'imap.example', 993, 'ssl', 'r@example.com') RETURNING id`)).rows[0].id
+    await db.admin.query(`UPDATE mailboxes SET secret = $2 WHERE id = $1`, [
+      mbx,
+      encrypt({ secret: OLD, purpose: 'mailbox', context: `mailbox:${mbx}`, plaintext: 'rotation-canary-mailbox' }),
+    ])
 
     // without the old secret nothing can be read, so nothing changes
     const blind = await script('secrets-reencrypt.mjs', { DATABASE_URL: db.url, APP_SECRET: NEW })
     expect(blind.code).toBe(1)
-    expect(blind.json.failed).toHaveLength(2)
-    expect(blind.stderr).not.toContain('rotation-canary-value-1')
+    expect(blind.json.failed).toHaveLength(4)
+    expect(blind.stderr).not.toMatch(/rotation-canary/)
 
     const env = { DATABASE_URL: db.url, APP_SECRET: NEW, APP_SECRET_PREVIOUS: OLD }
     const done = await script('secrets-reencrypt.mjs', env)
     expect(done.code).toBe(0)
-    expect(done.json).toMatchObject({ checked: 2, reencrypted: 2, failed: [] })
+    expect(done.json).toMatchObject({ checked: 4, reencrypted: 4, failed: [] })
+    const after = await db.admin.query(
+      `SELECT (SELECT client_secret FROM sso_connections WHERE id = $1) AS s, (SELECT secret FROM mailboxes WHERE id = $2) AS m`,
+      [sso, mbx]
+    )
+    expect(decrypt({ secrets: [NEW], purpose: 'setting', context: `sso:${sso}`, envelope: after.rows[0].s }).plaintext).toBe('rotation-canary-sso')
+    expect(decrypt({ secrets: [NEW], purpose: 'mailbox', context: `mailbox:${mbx}`, envelope: after.rows[0].m }).plaintext).toBe('rotation-canary-mailbox')
 
     // now readable with the new secret alone
     const { ConfigStore } = await import('@/lib/settings/store')
@@ -109,7 +125,7 @@ describe.skipIf(!TEST_DATABASE_URL)('operator commands', () => {
     } finally {
       await pool.end()
     }
-    expect((await script('secrets-reencrypt.mjs', { DATABASE_URL: db.url, APP_SECRET: NEW })).json).toMatchObject({ checked: 2, reencrypted: 0 })
+    expect((await script('secrets-reencrypt.mjs', { DATABASE_URL: db.url, APP_SECRET: NEW })).json).toMatchObject({ checked: 4, reencrypted: 0 })
   })
 
   it('refuses to run without its configuration', async () => {

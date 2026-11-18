@@ -233,8 +233,17 @@ def apply_retention(conn: psycopg.Connection, settings: Settings) -> int:
     return purged
 
 
-def start_run(conn: psycopg.Connection, stale_after_seconds: int) -> int | None:
+def start_run(
+    conn: psycopg.Connection,
+    stale_after_seconds: int,
+    mailbox_id: int | None = None,
+    trigger: str = "environment",
+) -> int | None:
     """Record the start of a run. Returns None if another run is in progress.
+
+    Runs of the environment-configured mailbox (mailbox_id None) exclude each
+    other; a mailbox configured in the panel only excludes runs of itself
+    (and is additionally guarded by its advisory lock in serve mode).
 
     A run counts as in progress if it has not finished and started less than
     stale_after_seconds ago (older ones are assumed to have crashed). The row
@@ -246,16 +255,17 @@ def start_run(conn: psycopg.Connection, stale_after_seconds: int) -> int | None:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (_RUN_LOCK_KEY,))
         cur.execute(
             """
-            INSERT INTO ingest_runs (started_at)
-            SELECT NOW()
+            INSERT INTO ingest_runs (started_at, mailbox_id, trigger)
+            SELECT NOW(), %s, %s
             WHERE NOT EXISTS (
                 SELECT 1 FROM ingest_runs
                 WHERE finished_at IS NULL
+                  AND mailbox_id IS NOT DISTINCT FROM %s
                   AND started_at > NOW() - make_interval(secs => %s)
             )
             RETURNING id
             """,
-            (stale_after_seconds,),
+            (mailbox_id, trigger, mailbox_id, stale_after_seconds),
         )
         row = cur.fetchone()
     conn.commit()
@@ -286,3 +296,173 @@ def finish_run(conn: psycopg.Connection, run_id: int, stats: dict, failed: bool 
             ),
         )
     conn.commit()
+
+
+# ---------- milestone 4: the panel's mailboxes, monitored domains, jobs ----------
+
+# Advisory lock keys: (class, object) pairs, so they cannot collide with the
+# single-key locks above. Class 1: "a run of mailbox <id> is active", held for
+# the whole run on the worker's lock connection; class 2: housekeeping.
+_MAILBOX_LOCK_CLASS = 41172309
+_HOUSEKEEPING_LOCK = (41172310, 0)
+
+
+def try_lock_mailbox(lock_conn: psycopg.Connection, mailbox_id: int) -> bool:
+    with lock_conn.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (_MAILBOX_LOCK_CLASS, mailbox_id))
+        return bool(cur.fetchone()[0])
+
+
+def unlock_mailbox(lock_conn: psycopg.Connection, mailbox_id: int) -> None:
+    with lock_conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_unlock(%s, %s)", (_MAILBOX_LOCK_CLASS, mailbox_id))
+
+
+def try_lock_housekeeping(lock_conn: psycopg.Connection) -> bool:
+    with lock_conn.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(%s, %s)", _HOUSEKEEPING_LOCK)
+        return bool(cur.fetchone()[0])
+
+
+def unlock_housekeeping(lock_conn: psycopg.Connection) -> None:
+    with lock_conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_unlock(%s, %s)", _HOUSEKEEPING_LOCK)
+
+
+def close_orphaned_runs(conn: psycopg.Connection, mailbox_id: int) -> int:
+    """Call while holding the mailbox's lock: any run of it still open belongs
+    to a worker that died (its lock went with its connection). Closed as
+    failed, so the history shows what happened and the next run proceeds."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingest_runs
+            SET finished_at = NOW(), failed = TRUE,
+                errors = COALESCE(errors, '[]'::jsonb) || '[{"error": "interrupted: the worker stopped during this run"}]'::jsonb
+            WHERE mailbox_id = %s AND finished_at IS NULL
+            """,
+            (mailbox_id,),
+        )
+        closed = cur.rowcount
+    conn.commit()
+    return closed
+
+
+def heartbeat(conn: psycopg.Connection, worker_id: str, hostname: str, version: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO worker_heartbeats (worker_id, hostname, version) VALUES (%s, %s, %s)
+            ON CONFLICT (worker_id) DO UPDATE SET seen_at = NOW()
+            """,
+            (worker_id, hostname[:200], version[:50]),
+        )
+        # Forget workers gone for a day.
+        cur.execute("DELETE FROM worker_heartbeats WHERE seen_at < NOW() - INTERVAL '1 day'")
+    conn.commit()
+
+
+def remove_heartbeat(conn: psycopg.Connection, worker_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM worker_heartbeats WHERE worker_id = %s", (worker_id,))
+    conn.commit()
+
+
+def fail_abandoned_jobs(conn: psycopg.Connection, alive_seconds: int) -> int:
+    """Jobs left "running" by a worker that is no longer alive."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE worker_jobs SET status = 'failed', finished_at = NOW(),
+                result = '{"ok": false, "message": "The worker stopped before finishing this."}'::jsonb
+            WHERE status = 'running'
+              AND claimed_by NOT IN (SELECT worker_id FROM worker_heartbeats WHERE seen_at > NOW() - make_interval(secs => %s))
+            """,
+            (alive_seconds,),
+        )
+        n = cur.rowcount
+    conn.commit()
+    return n
+
+
+def claim_job(conn: psycopg.Connection, worker_id: str) -> dict | None:
+    """The oldest queued job, marked as ours. SKIP LOCKED: two workers never
+    take the same job."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE worker_jobs SET status = 'running', claimed_by = %s, claimed_at = NOW()
+            WHERE id = (
+                SELECT id FROM worker_jobs WHERE status = 'queued' ORDER BY requested_at, id
+                FOR UPDATE SKIP LOCKED LIMIT 1
+            )
+            RETURNING id, kind, mailbox_id
+            """,
+            (worker_id,),
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return {"id": row[0], "kind": row[1], "mailbox_id": row[2]} if row else None
+
+
+def finish_job(conn: psycopg.Connection, job_id: int, ok: bool, message: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE worker_jobs SET status = %s, finished_at = NOW(), result = %s WHERE id = %s",
+            ("done" if ok else "failed", json.dumps({"ok": ok, "message": message[:500]}), job_id),
+        )
+    conn.commit()
+
+
+MAILBOX_COLUMNS = (
+    "id, name, kind, enabled, host, port, security, username, tenant_id, client_id, secret, "
+    "folder, processed_folder, invalid_folder, interval_minutes"
+)
+
+
+def load_mailbox(conn: psycopg.Connection, mailbox_id: int) -> dict | None:
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {MAILBOX_COLUMNS} FROM mailboxes WHERE id = %s", (mailbox_id,))
+        row = cur.fetchone()
+        names = [d.name for d in cur.description]
+    conn.commit()
+    return dict(zip(names, row)) if row else None
+
+
+def due_mailboxes(conn: psycopg.Connection) -> list[int]:
+    """Enabled mailboxes whose interval has passed since their last run
+    started (or that never ran), most overdue first."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT m.id FROM mailboxes m
+            LEFT JOIN LATERAL (
+                SELECT MAX(started_at) AS last FROM ingest_runs r WHERE r.mailbox_id = m.id
+            ) l ON TRUE
+            WHERE m.enabled
+              AND (l.last IS NULL OR l.last <= NOW() - make_interval(mins => m.interval_minutes))
+            ORDER BY l.last NULLS FIRST, m.id
+            """
+        )
+        ids = [r[0] for r in cur.fetchall()]
+    conn.commit()
+    return ids
+
+
+def db_monitored_domains(conn: psycopg.Connection) -> frozenset[str]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT name FROM monitored_domains")
+        names = frozenset(r[0] for r in cur.fetchall())
+    conn.commit()
+    return names
+
+
+def db_setting(conn: psycopg.Connection, key: str):
+    """A non-secret setting saved in the panel (lib/settings), or None."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT value, is_secret FROM settings WHERE key = %s", (key,))
+        row = cur.fetchone()
+    conn.commit()
+    if not row or row[1]:
+        return None
+    return row[0]
