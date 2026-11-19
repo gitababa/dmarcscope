@@ -56,7 +56,7 @@ def test_is_idempotent(db_settings):
 
 def test_filters_by_allowed_domains_and_retention(db_settings):
     only = replace(db_settings, allowed_domains=frozenset({"example.com"}))
-    assert _insert(only, report_xml(domain="evil.test")) == store.FILTERED
+    assert _insert(only, report_xml(domain="evil.test")) == store.NOT_MONITORED
     assert _insert(only, report_xml(domain="EXAMPLE.com")) == store.STORED
 
     cutoff = replace(db_settings, min_date=dt.date(2026, 1, 1))

@@ -5,8 +5,8 @@ import {Card,Notice,PageHeader,Pill } from '@/components/ui'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
 import { relTime, untilTime } from '@/lib/format'
-import { KINDS, domainsFromEnvironment, isKind, listDomains, listMailboxes, shortError, workerStatus } from '@/lib/mail'
-import { MAIL_ERRORS, MAIL_FIELDS, MailboxForm, WorkerNotice, runState } from './form'
+import { KINDS, domainsFromEnvironment, isKind, listDomains, listMailboxes, passStatus, shortError, workerStatus } from '@/lib/mail'
+import { MAIL_ERRORS, MAIL_FIELDS, MailboxForm, WorkerNotice, nextRunLabel, runState, scheduleWarning } from './form'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Mailboxes' }
@@ -25,14 +25,14 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
   const access = await requirePageRole('admin')
   const { error, field, done, new: adding } = await searchParams
   const db = getPool()
-  const [mailboxes, worker, domains] = await Promise.all([listMailboxes(db), workerStatus(db), listDomains(db)])
+  const [mailboxes, worker, domains, passes] = await Promise.all([listMailboxes(db), workerStatus(db), listDomains(db), passStatus(db)])
   const envDomains = domainsFromEnvironment()
   const noDomains = !envDomains && domains.length === 0
   const newKind = isKind(adding) ? adding : null
 
   return (
     <>
-      <PageHeader title="Mailboxes" lead="The mailboxes DMARC reports are read from. The worker checks each on its schedule; you can test one or run it now." />
+      <PageHeader title="Mailboxes" lead="The mailboxes DMARC reports are read from. Each is read on its schedule; you can test one or run it now." />
 
       {error && (
         <Notice tone="bad" role="alert">
@@ -46,8 +46,10 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
         </Notice>
       )}
       {noDomains && (
-        <Notice tone="warn" role="note">No monitored domains yet: mailboxes saved here read nothing until you <Link href="/admin/domains">add the domains you monitor</Link>.
-            Reports about any other domain are ignored.</Notice>
+        <Notice tone="info" role="note">
+          No monitored domains yet. Mailboxes are read, but nothing is stored: the domains found in reports are listed under{' '}
+          <Link href="/admin/domains">Domains</Link>, and their reports are held for 14 days until you choose which to monitor.
+        </Notice>
       )}
 
       <section className="section" aria-labelledby="mailboxes-head">
@@ -59,7 +61,7 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
             <WorkerNotice alive={worker.alive} lastSeen={worker.lastSeen} />
           </div>
         ) : (
-          <WorkerNotice alive={0} lastSeen={worker.lastSeen} />
+          <WorkerNotice alive={0} lastSeen={worker.lastSeen} passes={passes} />
         )}
         <div className="card flush" role="list" aria-label="Mailboxes">
           {mailboxes.length === 0 && (
@@ -85,8 +87,9 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
                   </div>
                   <div className="source-meta">
                     {m.last_run ? `Last run ${relTime(m.last_run.started_at)}` : 'Never run'}
-                    {m.enabled && m.next_run_at ? ` · next ${new Date(m.next_run_at).getTime() <= Date.now() ? 'when a worker is free' : untilTime(m.next_run_at)}` : ''}
+                    {nextRunLabel(m, untilTime) ? ` · next ${nextRunLabel(m, untilTime)}` : ''}
                   </div>
+                  {scheduleWarning(m, passes) && <div className="tone-warn small">{scheduleWarning(m, passes)}</div>}
                   {lastError && <div className="tone-bad small">{shortError(lastError, 160)}</div>}
                 </div>
                 <div className="person-tags">

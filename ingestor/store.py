@@ -13,6 +13,8 @@ from .config import Settings
 STORED = "stored"
 DUPLICATE = "duplicate"
 FILTERED = "filtered"
+# About a domain nobody monitors: held for a while instead (hold_report).
+NOT_MONITORED = "not_monitored"
 
 _INT4_MAX = 2_147_483_647
 
@@ -79,8 +81,9 @@ def insert_aggregate_report(conn: psycopg.Connection, report: dict, settings: Se
     """Insert one aggregate report and its records in the current transaction.
 
     Returns STORED, DUPLICATE (already ingested — reports are identified by
-    domain + reporting org + report id) or FILTERED (not for an allowed
-    domain, outside the retention window, or missing required fields).
+    domain + reporting org + report id), NOT_MONITORED (about a domain that is
+    not monitored) or FILTERED (outside the retention window, or missing
+    required fields).
     The caller commits or rolls back.
     """
     meta = report.get("report_metadata") or {}
@@ -89,7 +92,7 @@ def insert_aggregate_report(conn: psycopg.Connection, report: dict, settings: Se
     if not domain_name or len(domain_name) > 253:
         return FILTERED
     if settings.allowed_domains is not None and domain_name not in settings.allowed_domains:
-        return FILTERED
+        return NOT_MONITORED
 
     org_name = _text(meta.get("org_name"), 255) or "unknown"
     report_id = _text(meta.get("report_id"), 255)
@@ -348,14 +351,16 @@ def close_orphaned_runs(conn: psycopg.Connection, mailbox_id: int) -> int:
     return closed
 
 
-def heartbeat(conn: psycopg.Connection, worker_id: str, hostname: str, version: str) -> None:
+def heartbeat(conn: psycopg.Connection, worker_id: str, hostname: str, version: str, mode: str = "serve") -> None:
+    """mode: 'serve' (the long-running worker) or 'pass' (a one-off pass,
+    which beats only while it runs; the panel does not count it as a worker)."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO worker_heartbeats (worker_id, hostname, version) VALUES (%s, %s, %s)
+            INSERT INTO worker_heartbeats (worker_id, hostname, version, mode) VALUES (%s, %s, %s, %s)
             ON CONFLICT (worker_id) DO UPDATE SET seen_at = NOW()
             """,
-            (worker_id, hostname[:200], version[:50]),
+            (worker_id, hostname[:200], version[:50], mode),
         )
         # Forget workers gone for a day.
         cur.execute("DELETE FROM worker_heartbeats WHERE seen_at < NOW() - INTERVAL '1 day'")
@@ -383,6 +388,23 @@ def fail_abandoned_jobs(conn: psycopg.Connection, alive_seconds: int) -> int:
         n = cur.rowcount
     conn.commit()
     return n
+
+
+def claim_job_by_id(conn: psycopg.Connection, worker_id: str, job_id: int) -> dict | None:
+    """That job, if it is still queued, marked as ours. None if another worker
+    took it first (or it does not exist)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE worker_jobs SET status = 'running', claimed_by = %s, claimed_at = NOW()
+            WHERE id = (SELECT id FROM worker_jobs WHERE id = %s AND status = 'queued' FOR UPDATE SKIP LOCKED)
+            RETURNING id, kind, mailbox_id
+            """,
+            (worker_id, job_id),
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return {"id": row[0], "kind": row[1], "mailbox_id": row[2]} if row else None
 
 
 def claim_job(conn: psycopg.Connection, worker_id: str) -> dict | None:
@@ -466,3 +488,134 @@ def db_setting(conn: psycopg.Connection, key: str):
     if not row or row[1]:
         return None
     return row[0]
+
+
+# ---------- domains found in reports, and reports held for them ----------
+
+# Anyone can email a report about any domain: what is kept for domains
+# nobody monitors is bounded.
+MAX_DISCOVERED = 1000
+HELD_DAYS = 14
+MAX_HELD = 1000
+MAX_HELD_PER_DOMAIN = 100
+MAX_HELD_BYTES = 256 * 1024
+
+
+def note_domain(conn: psycopg.Connection, name: str, base_domain: str | None, monitored: bool) -> None:
+    """Count a report about `name`. A domain not yet listed is added only
+    while the list is under MAX_DISCOVERED, unless it is monitored. In the
+    caller's transaction."""
+    name = name.strip().lower().rstrip(".")
+    if not name or len(name) > 253:
+        return
+    base = base_domain.lower()[:253] if base_domain else None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO discovered_domains (name, base_domain, reports_seen)
+            SELECT %s, %s, 1
+            WHERE %s OR (SELECT COUNT(*) FROM discovered_domains) < %s
+            ON CONFLICT (name) DO UPDATE
+              SET reports_seen = discovered_domains.reports_seen + 1,
+                  last_seen_at = NOW(),
+                  base_domain = COALESCE(EXCLUDED.base_domain, discovered_domains.base_domain)
+            """,
+            (name, base, monitored, MAX_DISCOVERED),
+        )
+
+
+def hold_report(conn: psycopg.Connection, report: dict) -> bool:
+    """Keep a report about a domain nobody monitors, for HELD_DAYS. False if it
+    was not kept (too large, over a limit, or held already). In the caller's
+    transaction."""
+    meta = report.get("report_metadata") or {}
+    policy = report.get("policy_published") or {}
+    domain = str(policy.get("domain") or "").strip().lower().rstrip(".")
+    org_name = _text(meta.get("org_name"), 255) or "unknown"
+    report_id = _text(meta.get("report_id"), 255)
+    if not domain or len(domain) > 253 or not report_id:
+        return False
+    body = json.dumps(report, default=str)
+    if len(body.encode()) > MAX_HELD_BYTES:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO held_reports (domain, org_name, report_id, report)
+            SELECT %s, %s, %s, %s::jsonb
+            WHERE (SELECT COUNT(*) FROM held_reports) < %s
+              AND (SELECT COUNT(*) FROM held_reports WHERE domain = %s) < %s
+            ON CONFLICT (domain, org_name, report_id) DO NOTHING
+            """,
+            (domain, org_name, report_id, body, MAX_HELD, domain, MAX_HELD_PER_DOMAIN),
+        )
+        return cur.rowcount == 1
+
+
+def has_releasable(conn: psycopg.Connection) -> bool:
+    """Whether a held report is about a domain monitored in the panel."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT EXISTS (SELECT 1 FROM held_reports h JOIN monitored_domains m ON m.name = h.domain)")
+        found = bool(cur.fetchone()[0])
+    conn.commit()
+    return found
+
+
+def purge_held(conn: psycopg.Connection) -> int:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM held_reports WHERE received_at < NOW() - make_interval(days => %s)", (HELD_DAYS,))
+        n = cur.rowcount
+    conn.commit()
+    return n
+
+
+def release_held(conn: psycopg.Connection, settings: Settings) -> int:
+    """Import the held reports of domains that are monitored now. Returns the
+    number stored. Each report in its own transaction."""
+    if settings.allowed_domains is None:
+        names = None
+    else:
+        names = sorted(settings.allowed_domains)
+        if not names:
+            return 0
+    with conn.cursor() as cur:
+        if names is None:
+            cur.execute("SELECT id, report FROM held_reports ORDER BY id LIMIT 500")
+        else:
+            cur.execute("SELECT id, report FROM held_reports WHERE domain = ANY(%s) ORDER BY id LIMIT 500", (names,))
+        rows = cur.fetchall()
+    conn.commit()
+    stored = 0
+    for held_id, report in rows:
+        try:
+            outcome = insert_aggregate_report(conn, report if isinstance(report, dict) else json.loads(report), settings)
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM held_reports WHERE id = %s", (held_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        if outcome == STORED:
+            stored += 1
+    return stored
+
+
+def start_pass(conn: psycopg.Connection, trigger: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO ingest_passes (trigger) VALUES (%s) RETURNING id", (trigger,))
+        pass_id = cur.fetchone()[0]
+        # Keep the last few hundred.
+        cur.execute(
+            "DELETE FROM ingest_passes WHERE id < (SELECT MIN(id) FROM (SELECT id FROM ingest_passes ORDER BY id DESC LIMIT 300) t)"
+        )
+    conn.commit()
+    return pass_id
+
+
+def finish_pass(conn: psycopg.Connection, pass_id: int, summary: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ingest_passes SET finished_at = NOW(), summary = %s WHERE id = %s",
+            (json.dumps(summary, default=str), pass_id),
+        )
+    conn.commit()

@@ -100,9 +100,12 @@ def _describe(e: BaseException) -> str:
 
 
 class Worker:
-    def __init__(self, base: Settings, *, poll_seconds: float = POLL_SECONDS, env: dict | None = None):
+    def __init__(self, base: Settings, *, poll_seconds: float = POLL_SECONDS, env: dict | None = None, mode: str = "serve"):
         self.base = base
         self.env = env
+        # 'serve': python -m ingestor serve. 'pass': a one-off pass
+        # (ingestor/oneshot.py), not shown in the panel as a running worker.
+        self.mode = mode
         self.poll_seconds = poll_seconds
         self.worker_id = f"{socket.gethostname()[:60]}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self.stop = threading.Event()
@@ -117,7 +120,7 @@ class Worker:
         # rollback on the work connection never releases them.
         self.lock_conn = store.connect(self.base)
         self.lock_conn.autocommit = True
-        store.heartbeat(self.conn, self.worker_id, socket.gethostname(), __version__)
+        store.heartbeat(self.conn, self.worker_id, socket.gethostname(), __version__, self.mode)
         # A run can take longer than HEARTBEAT_ALIVE_SECONDS: keep reporting
         # in from a thread on its own connection, so other workers never take
         # this one for dead mid-run and fail the request it is working on.
@@ -130,7 +133,7 @@ class Worker:
     def _beat(self) -> None:
         while not self._beating.wait(HEARTBEAT_ALIVE_SECONDS / 4):
             try:
-                store.heartbeat(self._beat_conn, self.worker_id, socket.gethostname(), __version__)
+                store.heartbeat(self._beat_conn, self.worker_id, socket.gethostname(), __version__, self.mode)
             except Exception:  # noqa: BLE001 - the main loop's heartbeat still runs
                 log.warning("heartbeat failed", exc_info=True)
 
@@ -171,13 +174,13 @@ class Worker:
 
     def tick(self) -> bool:
         """Heartbeat, one job, then due mailboxes. True if anything was done."""
-        store.heartbeat(self.conn, self.worker_id, socket.gethostname(), __version__)
+        store.heartbeat(self.conn, self.worker_id, socket.gethostname(), __version__, self.mode)
         store.fail_abandoned_jobs(self.conn, HEARTBEAT_ALIVE_SECONDS)
         job = store.claim_job(self.conn, self.worker_id)
         if job:
             self.handle_job(job)
             return True
-        worked = False
+        worked = self.release_held() > 0
         for mailbox_id in store.due_mailboxes(self.conn):
             if self.stop.is_set():
                 break
@@ -205,6 +208,22 @@ class Worker:
         else:
             ok, message = outcome
             store.finish_job(self.conn, job["id"], ok, message)
+
+    def release_held(self) -> int:
+        """Import held reports of domains that became monitored. Returns the
+        number stored."""
+        try:
+            if not store.has_releasable(self.conn):
+                return 0
+            from .runner import with_panel_settings
+
+            settings = with_panel_settings(self.conn, self.base)
+            if settings.allowed_domains is None:
+                return 0
+            return store.release_held(self.conn, settings)
+        except Exception as e:  # noqa: BLE001 - retried on the next pass
+            log.warning("importing held reports failed: %s", _describe(e))
+            return 0
 
     def run_mailbox(self, mailbox_id: int, trigger: str) -> tuple[bool, str] | None:
         """One run of a mailbox. None if another worker holds it."""

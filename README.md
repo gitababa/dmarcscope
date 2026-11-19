@@ -70,11 +70,12 @@ find it, the setup page can write a new one to the log.
 
 **3. Connect a mailbox for reports.** Use a dedicated mailbox, for example
 `dmarc-reports@yourdomain.com`, readable over IMAP. A Gmail or Google Workspace address with
-an app password works, as does any IMAP host. Add it under **Mailboxes**, or as `IMAP_*`
-variables on Vercel. See [docs/mail.md](docs/mail.md).
+an app password works, as does any IMAP host. Add it under **Mailboxes** (on Vercel too) and
+press **Test connection**. See [docs/mail.md](docs/mail.md).
 
-**4. List your domains** under **Monitored domains**. Reports about any other domain are
-ignored, since anyone can email a report to the mailbox.
+**4. Choose your domains** under **Domains**. Once reports have been read, every domain they
+were about is listed there; press **Monitor** on yours. Only monitored domains are stored, since
+anyone can email a report to the mailbox; the others' reports are held for 14 days.
 
 **5. Ask for reports.** For each domain, publish a TXT record at `_dmarc.<domain>`:
 

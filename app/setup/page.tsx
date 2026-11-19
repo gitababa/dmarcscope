@@ -1,12 +1,14 @@
 import type { Metadata } from 'next'
 import { cookies } from 'next/headers'
 import { notFound } from 'next/navigation'
+import { DeploymentGuide } from '@/components/deploy-guide'
 import { BrandMark, Notice } from '@/components/ui'
 import { authProvider } from '@/lib/auth'
 import { PASSWORD_MIN } from '@/lib/auth/password-policy'
 import { purposeCookieName } from '@/lib/auth/session'
 import { otpauthUri } from '@/lib/crypto'
 import { getPool } from '@/lib/db'
+import { detectPlatform } from '@/lib/deploy-guide'
 import { qrPath } from '@/lib/qr'
 import { getAppName } from '@/lib/settings'
 import { REISSUE_COOLDOWN_SECONDS, type SetupTokenStatus, ensureSetupToken, ownerExists, setupTokenStatus } from '@/lib/setup'
@@ -63,7 +65,10 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
   return (
     <main className="auth-wrap">
       <div className="card auth-card wide">
-        <BrandMark size={24} />
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <BrandMark size={24} />
+          <DeploymentGuide detected={detectPlatform()} className="btn btn-sm btn-ghost" />
+        </div>
         <h1>Set up {appName}</h1>
         <div className="wizard-steps" aria-label="Setup progress">
           {STEPS.map((s, i) => (

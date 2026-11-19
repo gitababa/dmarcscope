@@ -6,7 +6,7 @@ DMARCscope is three things, and they can run anywhere:
 |---|---|---|
 | PostgreSQL 13+ | any managed or self-hosted instance | UTF-8 database |
 | Web app | `Dockerfile` → `node server.js`, port 3000 | stateless; scale horizontally |
-| Ingest worker | `Dockerfile.ingest` → `python -m ingestor serve` | long-running; reads the mailboxes set up in the panel ([mail.md](mail.md)) |
+| Ingest worker | `Dockerfile.ingest` → `python -m ingestor serve` | long-running; reads the mailboxes set up in the panel ([mail.md](mail.md)). On Vercel, a function instead ([Vercel](#vercel)) |
 | or, as in 1.1 | `Dockerfile.ingest` → `python -m ingestor run` | one-shot job for the mailbox in `IMAP_*`; schedule it (daily is enough) |
 
 Plus two one-off or scheduled calls:
@@ -208,36 +208,60 @@ to the IMAP server, the database, and DNS (for reverse lookups).
    `AUTH_PROVIDER=proxy-jwt`, `AUTH_PROXY_PRESET=gcp-iap`, `AUTH_PROXY_AUDIENCE=…` as described
    in [authentication.md](authentication.md). Restrict the service's ingress so it is only
    reachable through IAP.
-4. **Ingest** — build `Dockerfile.ingest`, deploy as a Cloud Run **job**, and trigger it daily
-   with Cloud Scheduler.
-5. **DNS checks** — a second Cloud Scheduler job calling `/api/cron/dns-check` with the bearer
-   token. Because IAP protects the public URL, either call the service's internal URL or grant
-   the scheduler's service account access through IAP.
+4. **Ingest** — build `Dockerfile.ingest` and deploy a Cloud Run **job** with the command
+   `python -m ingestor pass`, the same `APP_SECRET` as the web app, and Cloud Scheduler starting
+   it every 15 to 60 minutes. Each run is one bounded pass: the mailbox in `IMAP_*` if one is
+   set, waiting **Test connection** and **Run now** requests, then the mailboxes set up in the
+   app that are due. So requests made in the app are carried out at the next call. A job task
+   may run 10 minutes by default; keep the pass inside it:
 
-The same shape works on AWS (ECS/Fargate service + scheduled task + RDS) and Azure (Container
-Apps + Container Apps job + Azure Database for PostgreSQL).
+   ```bash
+   gcloud run jobs deploy dmarcscope-ingest --image …/dmarcscope-ingest \
+     --args pass --task-timeout 10m --memory 512Mi \
+     --set-env-vars INGEST_PASS_BUDGET_SECONDS=540,INGEST_TIME_BUDGET_SECONDS=420
+   ```
+
+   (`python -m ingestor run`, the earlier setup, reads only the mailbox in `IMAP_*`.)
+5. **DNS checks and alerts** — two more Cloud Scheduler jobs calling `/api/cron/dns-check`
+   (daily) and `/api/cron/alerts` (every five minutes) with the bearer token; Cloud Run scales
+   the web app to zero, so it cannot time alerts itself. With the ingest job that is three
+   scheduler jobs, the free allowance per billing account. Because IAP protects the public URL,
+   either call the service's internal URL or grant the scheduler's service account access
+   through IAP.
+
+The same shape works on AWS (ECS/Fargate service + scheduled task running `pass` + RDS) and
+Azure (Container Apps + Container Apps job running `pass` + Azure Database for PostgreSQL).
+
+The app has a **Deployment guide** (in the sidebar, for administrators, and on the setup page)
+with these steps per platform, and resource and schedule recommendations for your number of
+report emails a day.
 
 ## Vercel
 
 The repository deploys to Vercel as-is: the Next.js app, plus the ingest worker as a Python
-function (`api/cron/ingest.py`) that Vercel Cron calls once a day (`vercel.json`).
+function (`api/cron/ingest.py`). Vercel has no long-running processes, so instead of the
+`serve` worker, each call of that function does one bounded pass: it reads the mailboxes that
+are due, answers waiting **Test connection** and **Run now** requests, and imports held reports
+of newly monitored domains. Three things call it:
 
-**One difference from the other platforms:** Vercel cannot run the long-lived worker that reads
-the mailboxes you set up in the browser. On Vercel the reports mailbox goes in **environment
-variables** (`IMAP_*`), and the daily cron reads it. Everything else (domains, people, alerts,
-settings) is set up in the browser as usual.
+- **Test connection** and **Run now** in the app: the app calls the function straight away, so
+  a test answers within seconds and a run starts at once, on any plan.
+- **Vercel Cron**, on the schedule in `vercel.json` (once a day as shipped; see
+  [How often mailboxes are read](#how-often-mailboxes-are-read)).
+- Optionally, any other scheduler, with the machine token.
 
 1. **Import the repository** in Vercel (*Add New → Project*). The defaults are right.
 2. **Add a database.** *Storage → Create → Neon* (or any PostgreSQL), connected to the project.
    It sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED` for you.
-3. **Set the environment variables** (*Settings → Environment Variables*, Production):
+3. **Set the environment variables** (*Settings → Environment Variables*). Set them for
+   **all environments** (Production and Preview): the app and the ingest function must have the
+   same `APP_SECRET`.
 
    | Variable | Value |
    |---|---|
-   | `APP_URL` | the production address, e.g. `https://dmarcscope-you.vercel.app` |
-   | `APP_SECRET` | `openssl rand -base64 32` — keep a copy: secrets saved in the app need it |
-   | `CRON_SECRET` | `openssl rand -hex 32` — Vercel Cron sends it; without it the crons get 401 |
-   | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD` | the reports mailbox, e.g. `imap.gmail.com`, the address, an [app password](mail.md#imap-with-a-password) |
+   | `APP_URL` | the production address, e.g. `https://dmarc.example.com` |
+   | `APP_SECRET` | `openssl rand -base64 32`. Keep a copy: secrets saved in the app (mailbox passwords) need it |
+   | `CRON_SECRET` | `openssl rand -hex 32`. Vercel Cron sends it; without it the scheduled calls get 401 |
 
 4. **Create the tables** once, and again after each upgrade, from a checkout of the same
    version, with the *unpooled* connection string (*Storage → your database → .env.local*):
@@ -250,23 +274,80 @@ settings) is set up in the browser as usual.
    [create the owner](#first-start-create-the-owner). The token is in the project's **Logs**;
    the Hobby plan keeps an hour of them, so if it is gone, press **Write a new token to the log**
    on `/setup`.
-6. In the app, add your domains under **Monitored domains**, **before the first daily run**:
-   the cron keeps only reports about the listed domains, but while the list is empty it keeps
-   reports about *any* domain (anyone can email one to your mailbox). `ALLOWED_DOMAINS`, if set,
-   wins over the list.
+6. **Add the reports mailbox** under **Mailboxes** ([mail.md](mail.md)) and press **Test
+   connection**. Then **Run now**.
+7. **Choose your domains** under **Domains**. Until you monitor one, mailboxes are read but
+   nothing is stored: every domain the reports are about is listed there, with its reports held
+   for 14 days, and **Monitor** imports them.
+
+### How often mailboxes are read
+
+What Vercel allows depends on the plan (Vercel's
+[cron limits](https://vercel.com/docs/cron-jobs/usage-and-pricing) and
+[function limits](https://vercel.com/docs/functions/limitations), checked November 2026):
+
+| | Hobby | Pro and Enterprise |
+|---|---|---|
+| Cron schedule in `vercel.json` | at most once a day, at any minute of the scheduled hour | as often as every minute, on the minute |
+| A schedule more frequent than that | the **deployment fails** ("Hobby accounts are limited to daily cron jobs") | — |
+| Function time limit | 300 s | 300 s by default, up to 800 s |
+
+`vercel.json` ships with the daily schedule (ingest at 06:00, DNS checks at 06:30, alerts at
+07:00 UTC), because it is the only one that deploys on every plan. A mailbox's interval setting
+cannot make it read more often than the schedule calls; the Mailboxes page shows how often
+scheduled calls actually happen, and warns about a mailbox set to more than that.
+
+- **On Hobby**, daily is what Vercel Cron can do, and for DMARC reports (sent once a day) it is
+  enough. **Run now** reads a mailbox at any time. To read more often anyway, call the function
+  from another scheduler (below).
+- **On Pro**, change the ingest schedule in your copy of `vercel.json`, e.g. every 15 minutes,
+  and deploy:
+
+  ```json
+  { "path": "/api/cron/ingest", "schedule": "*/15 * * * *" }
+  ```
+
+  Each call reads only the mailboxes whose interval has passed. Don't merge that change into a
+  copy that deploys on a Hobby account: its deployments would fail.
+- **Another scheduler** (any plan): GitHub Actions, cron-job.org, or a cron job on any machine
+  can call `GET https://<your app>/api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>`.
+  For example, a workflow in your copy of the repository:
+
+  ```yaml
+  on:
+    schedule: [{ cron: '*/30 * * * *' }]
+  jobs:
+    ingest:
+      runs-on: ubuntu-latest
+      steps:
+        - run: curl -fsS -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" https://dmarc.example.com/api/cron/ingest
+  ```
+
+**Time limit.** One call stops starting new work after 240 seconds
+(`INGEST_PASS_BUDGET_SECONDS`), and one mailbox run reads mail for at most 170 seconds
+(`INGEST_TIME_BUDGET_SECONDS`), so every call ends within the 300 seconds every plan allows. A
+mailbox that does not fit waits for the next call, and a large backlog is worked through over
+several. On Pro, to get through a backlog faster, raise the function's `maxDuration` in
+`vercel.json` (up to 800) and both budgets to match, e.g. 700 and 600.
+
+**Deployment Protection.** The app calls its own function at the production domain
+(`VERCEL_PROJECT_PRODUCTION_URL`), which Vercel's Standard Protection leaves open. On preview
+deployments, and if you protect production too (a Pro option), the call would be refused: add a
+**Protection Bypass for Automation** secret (*Settings → Deployment Protection*) and redeploy;
+the app sends it. When a call is refused, the request in the app says so instead of waiting.
 
 Good to know:
 
-- The crons run daily: ingest at 06:00, DNS checks at 06:30, alerts at 07:00 UTC. That is what
-  the Hobby plan allows. Reports are not urgent, so daily is enough; for faster alerts see
-  [alerts.md](alerts.md).
-- The ingest function stops reading after about 170 seconds per run (Vercel's time limit); a
-  large backlog is worked through over several days.
-- Vercel's *Deployment Protection* puts preview deployments behind a Vercel sign-in. The
-  production address is reachable, and protected by the app's own sign-in.
+- **The mailbox in environment variables still works.** `IMAP_HOST`, `IMAP_USER` and
+  `IMAP_PASSWORD` (the earlier setup) are read on every scheduled call. That mailbox keeps
+  reports about *any* domain while no domain is monitored (anyone can email one), so add your
+  domains first. `ALLOWED_DOMAINS`, if set, wins over the list in the app.
 - `CRON_SECRET` stays in Vercel's environment even though the owner can also set a machine
   endpoint token in the app: Vercel Cron sends the environment variable, and the Python function
-  reads its configuration from the environment only.
+  reads its configuration from the environment only. The app's own calls to the function are
+  signed with `APP_SECRET` instead.
+- Vercel calls cron jobs a legacy feature that will move to *Schedules* (in beta). `vercel.json`
+  crons keep working; nothing in the app depends on which one calls it.
 
 ## Upgrades and backups
 

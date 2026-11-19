@@ -90,6 +90,11 @@ def make_lookup(servers: tuple[str, ...] = ()) -> Callable[[str], tuple[str, str
     return lookup
 
 
+def base_domain(host: str) -> str:
+    """The registrable domain of a host name (public suffix list)."""
+    return _base_domain(host)
+
+
 def _base_domain(host: str) -> str:
     try:
         base = get_base_domain(host)

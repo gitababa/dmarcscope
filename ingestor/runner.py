@@ -77,6 +77,14 @@ def invalid_reason(e: Exception) -> str:
     return f"not a valid DMARC report: {text[:300]}"
 
 
+def _base_of(domain: str) -> str | None:
+    """The registrable domain (public suffix list), or None."""
+    try:
+        return enrich.base_domain(domain.strip().lower().rstrip("."))
+    except Exception:  # noqa: BLE001 - grouping is cosmetic
+        return None
+
+
 def _store_parsed(conn, parsed: dict, settings: Settings, stats: dict) -> None:
     """Store one parsed report in its own transaction."""
     report = parsed.get("report")
@@ -87,6 +95,12 @@ def _store_parsed(conn, parsed: dict, settings: Settings, stats: dict) -> None:
         return
     try:
         outcome = store.insert_aggregate_report(conn, report, settings)
+        if outcome == store.NOT_MONITORED:
+            # Held for a while, so monitoring the domain later imports it.
+            store.hold_report(conn, report)
+        domain = str((report.get("policy_published") or {}).get("domain") or "")
+        if domain:
+            store.note_domain(conn, domain, _base_of(domain), monitored=outcome != store.NOT_MONITORED)
         conn.commit()
     except Exception:
         try:
@@ -148,8 +162,9 @@ def run_ingest(
     """Drain the mailbox, apply retention, backfill reverse DNS (only with
     `housekeeping`: serve mode lets one run at a time do those). Without
     mailbox_id: the mailbox configured in the environment (the scheduled job
-    of 1.1.0). With it: a mailbox configured in the panel (serve mode), which
-    refuses to ingest while no monitored domain is configured."""
+    of 1.1.0). With it: a mailbox configured in the panel, which stores
+    nothing while no monitored domain is configured (it only records the
+    domains it finds and holds their reports)."""
     settings.require_imap()
     stats = _new_stats()
     start = time.monotonic()
@@ -172,12 +187,13 @@ def run_ingest(
         failed = True  # until the mailbox phase completes
         try:
             if mailbox_id is not None and settings.allowed_domains is None:
-                raise RunRefused(
-                    "no monitored domains are configured: add the domains you monitor under Monitored domains "
-                    "(or set ALLOWED_DOMAINS) before reports are read"
-                )
+                # No monitored domain yet: read the mailbox, store nothing.
+                # The domains found are listed in the panel, and their reports
+                # are held until someone chooses to monitor them.
+                settings = replace(settings, allowed_domains=frozenset())
             if housekeeping:
                 stats["purged"] = store.apply_retention(conn, settings)
+                store.purge_held(conn)
 
             def handle(raw: bytes) -> str:
                 try:
@@ -198,6 +214,12 @@ def run_ingest(
 
             mailbox.drain(settings, handle, stats, deadline=start + settings.mail_budget_seconds, should_stop=should_stop)
             failed = False
+
+            try:
+                stats["stored"] += store.release_held(conn, settings)
+            except Exception as e:  # noqa: BLE001 - the held reports stay for the next run
+                log.exception("importing held reports failed")
+                stats["errors"].append({"error": f"held reports: {type(e).__name__}"})
 
             try:
                 if housekeeping:

@@ -9,7 +9,9 @@
 // sources). Forms show whether a secret is set and accept a replacement.
 //
 // "Test connection" and "Run now" are jobs for the worker (worker_jobs): the
-// web app never opens a mailbox itself.
+// web app never opens a mailbox itself. On Vercel, with no long-running
+// worker, the web app starts a one-off pass for the job at once
+// (lib/ingest-trigger.ts); elsewhere the worker picks it up.
 
 import type { Pool, PoolClient } from 'pg'
 import { type Actor, recordAudit, writeAudit } from './audit'
@@ -151,10 +153,37 @@ export async function workerStatus(db: Q): Promise<WorkerStatus> {
     `SELECT COUNT(*) FILTER (WHERE seen_at > NOW() - make_interval(secs => $1))::int AS alive,
             MAX(seen_at) AS last_seen,
             ARRAY_AGG(DISTINCT version) FILTER (WHERE seen_at > NOW() - make_interval(secs => $1) AND version IS NOT NULL) AS versions
-     FROM worker_heartbeats`,
+     FROM worker_heartbeats WHERE mode = 'serve'`,
     [WORKER_ALIVE_SECONDS]
   )
   return { alive: rows[0]?.alive ?? 0, lastSeen: rows[0]?.last_seen ?? null, versions: rows[0]?.versions ?? [] }
+}
+
+// When the work could not even be started (lib/ingest-trigger.ts), the
+// request says why, instead of waiting for a worker that never comes.
+export async function failQueuedJob(db: Q, jobId: number, message: string): Promise<void> {
+  await db.query(
+    `UPDATE worker_jobs SET status = 'failed', finished_at = NOW(), result = $2::jsonb WHERE id = $1 AND status = 'queued'`,
+    [jobId, JSON.stringify({ ok: false, message: message.slice(0, 500) })]
+  )
+}
+
+// How often scheduled passes (ingestor/oneshot.py) actually happen: the last
+// one, and the typical gap between the recent ones. The app cannot ask
+// Vercel which plan or schedule a project has, so it reports what it sees.
+export type PassStatus = { lastAt: string | null; typicalGapMinutes: number | null; count: number }
+
+export async function passStatus(db: Q): Promise<PassStatus> {
+  const { rows } = await db.query<{ started_at: string }>(
+    `SELECT started_at FROM ingest_passes WHERE trigger = 'schedule' ORDER BY started_at DESC LIMIT 9`
+  )
+  const times = rows.map((r) => new Date(r.started_at).getTime())
+  const gaps = times.slice(1).map((t, i) => (times[i] - t) / 60_000).sort((a, b) => a - b)
+  return {
+    lastAt: rows[0]?.started_at ?? null,
+    typicalGapMinutes: gaps.length ? Math.round(gaps[Math.floor(gaps.length / 2)]) : null,
+    count: rows.length,
+  }
 }
 
 // ---------- validation ----------
@@ -480,6 +509,33 @@ export async function removeDomain(db: Pool, actor: MailActor, id: number, env: 
     if (!rows[0]) throw new MailRefusal('not_found')
     return { result: undefined, detail: { domain: rows[0].name }, target: `domain:${rows[0].name}` }
   })
+}
+
+// ---------- domains found in reports ----------
+
+export type FoundDomain = {
+  name: string
+  base_domain: string | null
+  reports_seen: number
+  first_seen_at: string
+  last_seen_at: string
+  held: number
+  monitored: boolean
+}
+
+// Every domain reports were about, with how many reports are held for it
+// (domains nobody monitors yet). Grouped by registrable domain in the page.
+export async function listFoundDomains(db: Q, env: Env = process.env): Promise<FoundDomain[]> {
+  const fromEnv = domainsFromEnvironment(env)
+  const { rows } = await db.query<Omit<FoundDomain, 'monitored'> & { in_panel: boolean }>(
+    `SELECT f.name, f.base_domain, f.reports_seen, f.first_seen_at, f.last_seen_at,
+            (SELECT COUNT(*)::int FROM held_reports h WHERE h.domain = f.name) AS held,
+            EXISTS (SELECT 1 FROM monitored_domains m WHERE m.name = f.name) AS in_panel
+     FROM discovered_domains f
+     ORDER BY COALESCE(f.base_domain, f.name), f.name
+     LIMIT 1000`
+  )
+  return rows.map(({ in_panel, ...r }) => ({ ...r, monitored: fromEnv ? fromEnv.includes(r.name) : in_panel }))
 }
 
 // ---------- display ----------

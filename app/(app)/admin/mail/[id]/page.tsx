@@ -7,17 +7,20 @@ import { Card, Notice, PageHeader, Pill } from '@/components/ui'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
 import { fmtDate, relTime, untilTime } from '@/lib/format'
-import { KINDS, type JobRow, type RunRow, getMailbox, isKind, listJobs, listRuns, shortError, workerStatus } from '@/lib/mail'
+import { startsWorkItself } from '@/lib/ingest-trigger'
+import { KINDS, type JobRow, type RunRow, getMailbox, isKind, listJobs, listRuns, passStatus, shortError, workerStatus } from '@/lib/mail'
 import { deleteMailboxAction, requestRunAction, requestTestAction, toggleMailboxAction } from '../../mail-actions'
-import { MAIL_ERRORS, MAIL_FIELDS, MailboxForm, WorkerNotice, runState } from '../form'
+import { MAIL_ERRORS, MAIL_FIELDS, MailboxForm, WorkerNotice, nextRunLabel, runState, scheduleWarning } from '../form'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Mailbox' }
 
 const DONE: Record<string, string> = {
-  created: 'Mailbox added. Test the connection to check the settings; the worker reads it on its schedule.',
-  saved: 'Saved. The worker uses the new settings from its next run.',
+  created: 'Mailbox added. Test the connection to check the settings; it is read on its schedule.',
+  saved: 'Saved. The next run uses the new settings.',
   queued: 'Asked the worker. The result appears below when it is done.',
+  tested: 'Tested. The result is below.',
+  started: 'Started. This page updates itself until it is done.',
   enabled: 'The mailbox is checked on schedule again.',
   disabled: 'Paused: the mailbox is no longer checked on schedule. Run now still works.',
 }
@@ -37,7 +40,7 @@ function JobLine({ j }: { j: JobRow }) {
       </div>
       <div className="person-tags">
         {waiting ? (
-          <Pill tone="info">{j.status === 'queued' ? 'waiting for the worker' : 'in progress'}</Pill>
+          <Pill tone="info">{j.status === 'queued' ? (startsWorkItself() ? 'starting' : 'waiting for the worker') : 'in progress'}</Pill>
         ) : (
           <Pill tone={j.status === 'done' ? 'ok' : 'bad'}>{j.status === 'done' ? 'succeeded' : 'failed'}</Pill>
         )}
@@ -91,7 +94,7 @@ export default async function MailboxPage({
   if (!/^\d{1,15}$/.test(rawId)) notFound()
   const id = Number(rawId)
   const db = getPool()
-  const [mailbox, worker] = await Promise.all([getMailbox(db, id), workerStatus(db)])
+  const [mailbox, worker, passes] = await Promise.all([getMailbox(db, id), workerStatus(db), passStatus(db)])
   if (!mailbox) notFound()
   const [runs, jobs] = await Promise.all([listRuns(db, id, 30), listJobs(db, id, 6)])
   const waiting = jobs.some((j) => j.status === 'queued' || j.status === 'running') || runs.some((r) => !r.finished_at)
@@ -166,14 +169,13 @@ export default async function MailboxPage({
             <dt>Schedule</dt>
             <dd>
               {mailbox.enabled ? `every ${mailbox.interval_minutes} minutes` : 'paused'}
-              {mailbox.enabled && mailbox.next_run_at
-                ? ` · next ${new Date(mailbox.next_run_at).getTime() <= Date.now() ? 'when a worker is free' : untilTime(mailbox.next_run_at)}`
-                : ''}
+              {nextRunLabel(mailbox, untilTime) ? ` · next ${nextRunLabel(mailbox, untilTime)}` : ''}
+              {scheduleWarning(mailbox, passes) && <div className="tone-warn small">{scheduleWarning(mailbox, passes)}</div>}
             </dd>
             <dt>{KINDS[mailbox.kind].secretLabel}</dt>
             <dd>{mailbox.secret_set ? `set${mailbox.secret_updated_at ? `, last changed ${relTime(mailbox.secret_updated_at)}` : ''}` : 'not set'}</dd>
           </dl>
-          <WorkerNotice alive={worker.alive} lastSeen={worker.lastSeen} />
+          <WorkerNotice alive={worker.alive} lastSeen={worker.lastSeen} passes={passes} />
           <div className="inline-form" style={{ marginTop: '0.8rem' }}>
             <form action={toggleMailboxAction}>
               <input type="hidden" name="id" value={mailbox.id} />

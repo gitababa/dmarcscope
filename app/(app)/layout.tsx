@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { cookies } from 'next/headers'
 import { signOutAction } from '@/app/actions'
 import { AppShell, SubmitButton, ThemeSwitch, type NavGroup } from '@/components/client'
+import { DeploymentGuide } from '@/components/deploy-guide'
 import { Icon } from '@/components/icons'
 import { Avatar, BrandMark } from '@/components/ui'
 import { listPendingRequests } from '@/lib/admin'
@@ -10,6 +11,7 @@ import { authProvider, hasSignInPage } from '@/lib/auth'
 import { atLeast } from '@/lib/auth/roles'
 import { requireViewer } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
+import { detectPlatform } from '@/lib/deploy-guide'
 import { relTime } from '@/lib/format'
 import { getDomainNames, getIngestHealth } from '@/lib/queries'
 import { getAppName } from '@/lib/settings'
@@ -59,7 +61,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         label: 'Data & alerting',
         items: [
           { href: '/admin/mail', label: 'Mailboxes', icon: 'inbox', match: ['/admin/mail'] },
-          { href: '/admin/domains', label: 'Monitored domains', icon: 'list' },
+          { href: '/admin/domains', label: 'Domains', icon: 'list' },
           { href: '/admin/alerts', label: 'Alerts', icon: 'bell', badge: openAlerts, badgeTone: 'bad' },
         ],
       },
@@ -104,6 +106,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const footer = (
     <>
+      {isAdmin && <DeploymentGuide detected={detectPlatform()} className="btn btn-sm btn-ghost sb-guide" />}
       <Link href={isAdmin ? '/admin/mail' : '/'} className="row small" style={{ color: 'var(--text-muted)', gap: '0.5rem', padding: '0 0.25rem' }} title={ingestText}>
         <span className={`dot ${ingestTone}${ingestTone === 'ok' ? ' pulse' : ''}`} />
         {ingestText}

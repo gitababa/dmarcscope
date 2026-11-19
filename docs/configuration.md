@@ -110,17 +110,19 @@ node scripts/secrets-reencrypt.mjs   # npm run secrets:reencrypt: after changing
 | `IMAP_FOLDER` | `INBOX` | Folder to read. |
 | `IMAP_PROCESSED_FOLDER` | — | Move stored reports here. Default: leave them in place, marked as read. |
 | `IMAP_INVALID_FOLDER` | `DMARC-Invalid` | Where messages that are not DMARC reports are moved. |
-| `ALLOWED_DOMAINS` | — (the list under Monitored domains) | The domains you monitor; reports about any other domain are ignored. When set it wins over the panel's list (set it on the web app too, so the panel shows it). With neither, `run` accepts reports about **any** domain and logs a warning on every run (anyone can email a report about any domain to the mailbox), while `serve` refuses to read a mailbox at all. (Unrelated to `ALLOWED_EMAIL_DOMAINS`, which is about who may sign in.) |
+| `ALLOWED_DOMAINS` | — (the list under Domains) | The domains you monitor; reports about any other domain are ignored. When set it wins over the panel's list (set it on the web app too, so the panel shows it). With neither, `run` accepts reports about **any** domain and logs a warning on every run (anyone can email a report about any domain to the mailbox), while a panel mailbox is read but stores nothing: it lists the domains it finds and holds their reports for 14 days ([mail.md](mail.md#monitored-domains)). (Unrelated to `ALLOWED_EMAIL_DOMAINS`, which is about who may sign in.) |
 | `RETENTION_DAYS` | — (the panel setting; else keep forever) | Delete reports older than this on every run. `0` means forever and wins over the panel. |
 | `INGEST_MIN_DATE` | — | Fixed cutoff (`YYYY-MM-DD`): older reports are never fetched or kept. |
 | `INGEST_MAX_MESSAGES` | `2000` | Messages processed per run. |
 | `INGEST_TIME_BUDGET_SECONDS` | `600` | Time limit for the mailbox phase of a run. |
 | `INGEST_ENRICH_BUDGET_SECONDS` | `60` | Time limit for reverse-DNS lookups; `0` disables them. |
+| `INGEST_PASS_BUDGET_SECONDS` | `240` | Vercel only: one call of the ingest function stops starting new work after this many seconds. Keep it below the function's `maxDuration` ([deployment.md](deployment.md#how-often-mailboxes-are-read)). |
 
 ### Commands
 
 ```bash
 python -m ingestor serve            # keep running: the mailboxes set up in the panel (needs APP_SECRET)
+python -m ingestor pass             # one bounded pass, for a scheduler: what serve does, once (needs APP_SECRET)
 python -m ingestor run              # mailbox → database, retention, reverse-DNS backfill
 python -m ingestor import PATH...   # load .xml / .gz / .zip / .eml files or directories
 python -m ingestor enrich           # reverse-DNS backfill only
