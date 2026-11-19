@@ -19,7 +19,7 @@ vi.mock('node:dns/promises', () => {
     '_dmarc.example.com': ['v=DMARC1; p=quarantine; rua=mailto:d@example.com'],
     'sel1._domainkey.example.com': ['v=DKIM1; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A'],
   }
-  return {
+  const fns = {
     resolveTxt: async (name: string) => {
       const r = txt[name.toLowerCase()]
       if (!r) throw notFound()
@@ -33,6 +33,16 @@ vi.mock('node:dns/promises', () => {
       throw notFound()
     },
   }
+  // lib/dns-resolver.ts makes a Resolver per query.
+  class Resolver {
+    setServers() {}
+    cancel() {}
+    resolveTxt = fns.resolveTxt
+    resolveMx = fns.resolveMx
+    resolve4 = fns.resolve4
+    resolve6 = fns.resolve6
+  }
+  return { ...fns, Resolver }
 })
 
 describe.skipIf(!url)('database queries', () => {

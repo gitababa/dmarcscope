@@ -490,7 +490,7 @@ def test_housekeeping_is_done_by_one_run_at_a_time(db_settings, imap, monkeypatc
     monkeypatch.setattr(store, "apply_retention", lambda conn, settings: calls.append("retention") or 0)
     from ingestor import enrich as enrich_mod
 
-    monkeypatch.setattr(enrich_mod, "enrich_ip_metadata", lambda conn, budget: calls.append("enrich") or 0)
+    monkeypatch.setattr(enrich_mod, "enrich_ip_metadata", lambda conn, budget, **kw: calls.append("enrich") or 0)
     add_domains(db_settings, "example.com")
     mid = add_mailbox(db_settings, port=imap.port)
     holder, w = worker(db_settings), worker(db_settings)
