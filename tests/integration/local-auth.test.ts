@@ -86,6 +86,52 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
     expect(rows[0].token_hash).not.toContain(token)
   })
 
+  it('writes a new token to the log on request, keeps the earlier ones, and spaces requests out', async () => {
+    const { reissueSetupToken, setupTokenStatus, checkSetupToken } = await import('@/lib/setup')
+    const { getPool } = await import('@/lib/db')
+    const lines: string[] = []
+    // The first token was minted just now: a request inside the cooldown is refused.
+    expect(await reissueSetupToken(getPool(), process.env, (l) => lines.push(l))).toEqual({ ok: false, reason: 'cooldown' })
+    expect((await setup('new-token', {})).location).toBe(`${BASE}/setup?error=token_cooldown`)
+    expect(lines).toEqual([])
+
+    await db.admin.query(`UPDATE setup_tokens SET created_at = created_at - INTERVAL '5 minutes'`)
+    const res = await setup('new-token', {})
+    expect(res.location).toBe(`${BASE}/setup?done=new_token`)
+    const fresh = printed.filter((l) => l.startsWith('[setup] No owner account exists yet'))
+    expect(fresh).toHaveLength(2)
+    const second = /setup token \(valid for 24 hours\): (\S+)$/.exec(fresh[1])![1]
+    expect(second).not.toBe(token)
+    // Both work: a stranger pressing the button cannot lock the operator out.
+    expect((await checkSetupToken(getPool(), token)).ok).toBe(true)
+    expect((await checkSetupToken(getPool(), second)).ok).toBe(true)
+    expect(await setupTokenStatus(getPool())).toMatchObject({ source: 'generated', usable: 2 })
+
+    // At most five usable at once: the oldest stop working.
+    for (let i = 0; i < 5; i++) {
+      await db.admin.query(`UPDATE setup_tokens SET created_at = created_at - INTERVAL '5 minutes'`)
+      expect((await reissueSetupToken(getPool())).ok).toBe(true)
+    }
+    expect(await setupTokenStatus(getPool())).toMatchObject({ usable: 5 })
+    expect((await checkSetupToken(getPool(), token)).ok).toBe(false)
+    expect((await checkSetupToken(getPool(), second)).ok).toBe(false)
+    const all = printed.filter((l) => l.startsWith('[setup] No owner account exists yet'))
+    expect(all).toHaveLength(7)
+    token = /setup token \(valid for 24 hours\): (\S+)$/.exec(all.at(-1)!)![1]
+    expect((await checkSetupToken(getPool(), token)).ok).toBe(true)
+
+    // A cross-origin post does nothing.
+    expect((await setup('new-token', {}, { origin: 'https://evil.example' })).status).toBe(403)
+  })
+
+  it('does not generate tokens when SETUP_TOKEN is set', async () => {
+    const { reissueSetupToken, setupTokenStatus } = await import('@/lib/setup')
+    const { getPool } = await import('@/lib/db')
+    const env = { ...process.env, SETUP_TOKEN: 'operator-chosen-token-0123456789' }
+    expect(await reissueSetupToken(getPool(), env, () => {})).toEqual({ ok: false, reason: 'environment' })
+    expect(await setupTokenStatus(getPool(), env)).toEqual({ source: 'environment' })
+  })
+
   it('refuses a wrong setup token, and a cross-origin post', async () => {
     const wrong = await setup('token', { token: 'not-the-token' })
     expect(wrong.location).toBe(`${BASE}/setup?error=token_invalid`)
@@ -184,7 +230,7 @@ describe.skipIf(!TEST_DATABASE_URL)('first-run setup and local sign-in', () => {
   })
 
   it('serves 404 for every setup step once an owner exists, with any token', async () => {
-    for (const step of ['token', 'account', 'totp', 'restart']) {
+    for (const step of ['token', 'account', 'totp', 'restart', 'new-token']) {
       expect((await setup(step, { token })).status).toBe(404)
     }
     const { ensureSetupToken } = await import('@/lib/setup')

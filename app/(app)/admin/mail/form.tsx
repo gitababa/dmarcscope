@@ -210,10 +210,31 @@ export function WorkerNotice({ alive, lastSeen }: { alive: number; lastSeen: str
       </p>
     )
   }
+  // Vercel cannot run the long-lived worker: its daily cron reads the
+  // mailbox in IMAP_* instead (docs/deployment.md#vercel).
+  if (process.env.VERCEL === '1') {
+    return (
+      <Notice tone="info" role="note">
+        <strong>On Vercel, mailboxes saved here are not read.</strong> Vercel cannot run the long-lived worker they need. Instead,
+        the daily ingest cron reads the mailbox you put in the project&apos;s environment variables: <code>IMAP_HOST</code>,{' '}
+        <code>IMAP_USER</code> and <code>IMAP_PASSWORD</code> (then redeploy).{' '}
+        {process.env.IMAP_HOST ? (
+          <>
+            This deployment has one set: <code>{process.env.IMAP_USER || '?'}</code> on <code>{process.env.IMAP_HOST}</code>.
+          </>
+        ) : (
+          <>None is set yet.</>
+        )}{' '}
+        The domains you list under Monitored domains still decide which reports are kept. See docs/deployment.md, section Vercel.
+      </Notice>
+    )
+  }
   return (
-    <Notice tone="warn" role="note">No worker is running{lastSeen ? ` (last seen ${relTime(lastSeen)})` : ''}. Mailboxes saved here are read by{' '}
-        <code>python -m ingestor serve</code>, with the same <code>DATABASE_URL</code> and <code>APP_SECRET</code> as this
-        app (see docs/mail.md). Until one runs, nothing is checked and tests wait.</Notice>
+    <Notice tone="warn" role="note">
+      No worker is running{lastSeen ? ` (last seen ${relTime(lastSeen)})` : ''}. Mailboxes saved here are read by{' '}
+      <code>python -m ingestor serve</code>, with the same <code>DATABASE_URL</code> and <code>APP_SECRET</code> as this app (see
+      docs/mail.md). Until one runs, nothing is checked and tests wait.
+    </Notice>
   )
 }
 

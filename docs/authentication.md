@@ -38,9 +38,13 @@ With only `DATABASE_URL`, `APP_URL` and `APP_SECRET` set, the app manages sign-i
    [setup] No owner account exists yet. Open https://dmarc.example.com/setup and enter this one-time setup token (valid for 24 hours): …
    ```
 
-   The token is stored only as a digest and is valid for 24 hours. If it expires, restart the
-   app or open `/setup` again to get a new one. To choose the token yourself instead, set
-   `SETUP_TOKEN` (at least 24 characters).
+   The token is stored only as a digest and is valid for 24 hours. It is never shown on the page:
+   only someone who can read the server log can create the owner. If the line is gone (a
+   platform that keeps an hour of logs, a missed start) or the token expired, press **Write a
+   new token to the log** on `/setup`: earlier tokens keep working, at most five are usable at
+   once, and a new one can be requested once a minute. The page also says when the newest token
+   was written and where to look on each platform ([deployment.md](deployment.md#first-start-create-the-owner)).
+   To choose the token yourself instead, set `SETUP_TOKEN` (at least 24 characters).
 2. Open `/setup`, enter the token, then the owner's email address, name and password (at least 12
    characters; the most common passwords are refused).
 3. Scan the QR code with an authenticator app and enter the code it shows.

@@ -4,6 +4,12 @@
 //   - generated when the app starts (and when /setup is opened) if there is
 //     no usable one, stored as a SHA-256 digest, written to the server log
 //     once, valid for 24 hours;
+//   - generated on request from /setup ("write a new token to the log"), for
+//     an operator who missed the log line (a platform that keeps an hour of
+//     logs, say). The token is never shown on the page: only someone who can
+//     read the server log can use it. Earlier tokens stay valid, so a stranger
+//     pressing the button cannot lock the operator out; requests are spaced
+//     out and at most MAX_USABLE tokens are usable at once;
 //   - or supplied by the operator as SETUP_TOKEN (then nothing is generated).
 //
 // A token is spent when setup completes. After that, /setup answers 404 for
@@ -15,6 +21,10 @@ import { type Env, appUrl } from './config'
 import { constantTimeEqual, encryptSecret, hashRecoveryCode, newRecoveryCodes, randomToken, sha256Hex, totpStep } from './crypto'
 
 const TOKEN_TTL_HOURS = 24
+// A new token on request at most this often, and no more than this many
+// usable at once (the oldest stop working first).
+export const REISSUE_COOLDOWN_SECONDS = 60
+const MAX_USABLE = 5
 const SETUP_LOCK = 4117230902 // advisory lock key, next to the migration runner's
 export const SETUP_TOKEN_MIN = 24
 
@@ -35,27 +45,72 @@ function envToken(env: Env): string | null {
 // Called at startup and whenever /setup is opened with no owner yet. Logs a
 // new token only if none is usable, so it is printed once per token.
 export async function ensureSetupToken(db: Pool, env: Env = process.env, log: (line: string) => void = console.log): Promise<void> {
+  await mint(db, env, log, 'if_none')
+}
+
+export type ReissueResult = { ok: true } | { ok: false; reason: 'environment' | 'owner_exists' | 'cooldown' }
+
+// "Write a new token to the log", from /setup. See the top of this file.
+export async function reissueSetupToken(db: Pool, env: Env = process.env, log: (line: string) => void = console.log): Promise<ReissueResult> {
+  return mint(db, env, log, 'requested')
+}
+
+export type SetupTokenStatus =
+  | { source: 'environment' }
+  | { source: 'generated'; latestCreatedAt: string | null; latestExpiresAt: string | null; usable: number }
+
+// What /setup tells the operator about the token: when the newest was
+// written to the log and until when it works. Never the token itself.
+export async function setupTokenStatus(db: Pick<Pool, 'query'>, env: Env = process.env): Promise<SetupTokenStatus> {
+  if (envToken(env)) return { source: 'environment' }
+  const { rows } = await db.query<{ created_at: string | null; expires_at: string | null; usable: number }>(`
+    SELECT (SELECT created_at FROM setup_tokens WHERE used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1) AS created_at,
+           (SELECT expires_at FROM setup_tokens WHERE used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1) AS expires_at,
+           (SELECT COUNT(*)::int FROM setup_tokens WHERE used_at IS NULL AND expires_at > NOW()) AS usable`)
+  const r = rows[0]
+  return {
+    source: 'generated',
+    latestCreatedAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+    latestExpiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : null,
+    usable: r.usable,
+  }
+}
+
+async function mint(db: Pool, env: Env, log: (line: string) => void, mode: 'if_none' | 'requested'): Promise<ReissueResult> {
   const fromEnv = envToken(env)
   if (fromEnv) {
     if (fromEnv.length < SETUP_TOKEN_MIN) console.error(`[setup] SETUP_TOKEN is shorter than ${SETUP_TOKEN_MIN} characters and is refused.`)
-    return
+    return { ok: false, reason: 'environment' }
   }
   const client = await db.connect()
   let token: string | null = null
+  let result: ReissueResult = { ok: true }
   try {
     await client.query('BEGIN')
     // Two replicas starting together must not both mint (and log) a token.
     await client.query('SELECT pg_advisory_xact_lock($1)', [SETUP_LOCK])
-    const { rows } = await client.query<{ owner: boolean; usable: boolean }>(`
-      SELECT EXISTS (SELECT 1 FROM users WHERE role = 'owner') AS owner,
-             EXISTS (SELECT 1 FROM setup_tokens WHERE used_at IS NULL AND expires_at > NOW()) AS usable`)
-    if (!rows[0].owner && !rows[0].usable) {
+    const { rows } = await client.query<{ owner: boolean; usable: boolean; recent: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM users WHERE role = 'owner') AS owner,
+              EXISTS (SELECT 1 FROM setup_tokens WHERE used_at IS NULL AND expires_at > NOW()) AS usable,
+              EXISTS (SELECT 1 FROM setup_tokens WHERE expires_at IS NOT NULL AND created_at > NOW() - make_interval(secs => $1)) AS recent`,
+      [REISSUE_COOLDOWN_SECONDS]
+    )
+    const { owner, usable, recent } = rows[0]
+    if (owner) result = { ok: false, reason: 'owner_exists' }
+    else if (mode === 'requested' && recent) result = { ok: false, reason: 'cooldown' }
+    else if (mode === 'requested' || !usable) {
       token = randomToken(32)
       await client.query(`INSERT INTO setup_tokens (token_hash, expires_at) VALUES ($1, NOW() + make_interval(hours => $2))`, [
         sha256Hex(token),
         TOKEN_TTL_HOURS,
       ])
-      await writeAudit(client, { action: 'setup_token_created', detail: { valid_hours: TOKEN_TTL_HOURS } })
+      // Keep at most MAX_USABLE usable tokens: the oldest stop working.
+      await client.query(
+        `UPDATE setup_tokens SET expires_at = NOW()
+          WHERE id IN (SELECT id FROM setup_tokens WHERE used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC, id DESC OFFSET $1)`,
+        [MAX_USABLE]
+      )
+      await writeAudit(client, { action: 'setup_token_created', detail: { valid_hours: TOKEN_TTL_HOURS, requested: mode === 'requested' } })
     }
     await client.query('COMMIT')
   } catch (err) {
@@ -73,6 +128,7 @@ export async function ensureSetupToken(db: Pool, env: Env = process.env, log: (l
     }
     log(`[setup] No owner account exists yet. Open ${where} and enter this one-time setup token (valid for ${TOKEN_TTL_HOURS} hours): ${token}`)
   }
+  return result
 }
 
 export async function checkSetupToken(db: Pick<Pool, 'query'>, presented: string, env: Env = process.env): Promise<TokenCheck> {
