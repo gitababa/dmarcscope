@@ -86,7 +86,7 @@ function jwksFor(url: string): JWTVerifyGetKey {
   return jwks
 }
 
-export async function identityFromProxyJwt(headers: HeaderBag, env: Env = process.env): Promise<Identity | null> {
+export async function identityFromProxyJwt(headers: HeaderBag, env: Env = process.env, extraGroups: readonly string[] = []): Promise<Identity | null> {
   const cfg = jwtProxyConfig(env)
   const token = headers.get(cfg.header)
   if (!token) return null
@@ -109,7 +109,7 @@ export async function identityFromProxyJwt(headers: HeaderBag, env: Env = proces
       sub: typeof payload.sub === 'string' ? payload.sub : email,
       email: email.toLowerCase(),
       name: typeof payload.name === 'string' ? payload.name : undefined,
-      groups: relevantGroups(groups, env),
+      groups: relevantGroups(groups, env, extraGroups),
     }
   } catch (err) {
     console.warn('[auth] proxy assertion rejected:', err instanceof Error ? err.message : String(err))
@@ -119,7 +119,7 @@ export async function identityFromProxyJwt(headers: HeaderBag, env: Env = proces
 
 // ---------- proxy-header ----------
 
-export function identityFromProxyHeader(headers: HeaderBag, env: Env = process.env): Identity | null {
+export function identityFromProxyHeader(headers: HeaderBag, env: Env = process.env, extraGroups: readonly string[] = []): Identity | null {
   const secret = env.AUTH_PROXY_SHARED_SECRET
   if (secret) {
     if (secret.length < 16) {
@@ -149,6 +149,6 @@ export function identityFromProxyHeader(headers: HeaderBag, env: Env = process.e
     sub: email,
     email,
     name: headers.get(nameHeader)?.trim() || undefined,
-    groups: relevantGroups(groups, env),
+    groups: relevantGroups(groups, env, extraGroups),
   }
 }

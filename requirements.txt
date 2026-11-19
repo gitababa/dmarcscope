@@ -1,3 +1,5 @@
 # Ingest worker (python -m ingestor). Python 3.11+.
 parsedmarc==11.3.0
 psycopg[binary]==3.3.9
+# AES-GCM and HKDF for secrets stored in the database (ingestor/crypto.py).
+cryptography==50.0.2

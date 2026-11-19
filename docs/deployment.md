@@ -6,7 +6,8 @@ DMARCscope is three things, and they can run anywhere:
 |---|---|---|
 | PostgreSQL 13+ | any managed or self-hosted instance | UTF-8 database |
 | Web app | `Dockerfile` → `node server.js`, port 3000 | stateless; scale horizontally |
-| Ingest worker | `Dockerfile.ingest` → `python -m ingestor run` | one-shot job; schedule it (daily is enough) |
+| Ingest worker | `Dockerfile.ingest` → `python -m ingestor serve` | long-running; reads the mailboxes set up in the panel ([mail.md](mail.md)) |
+| or, as in 1.1 | `Dockerfile.ingest` → `python -m ingestor run` | one-shot job for the mailbox in `IMAP_*`; schedule it (daily is enough) |
 
 Plus two one-off or scheduled calls:
 
@@ -17,6 +18,9 @@ Plus two one-off or scheduled calls:
   `Authorization: Bearer $CRON_SECRET` refreshes the DNS health of every domain, which keeps
   the SPF attribution on the Issues page current.
 
+- **Alerts** (serverless only) — `GET /api/cron/alerts` with the same bearer token every five
+  minutes evaluates the alert rules and sends what is due ([alerts.md](alerts.md)). A
+  long-running web app does this itself on a timer.
 - **Ingest monitoring** (recommended) — `GET /api/cron/status` with the same bearer token
   answers `200` while an ingest run has completed in the last `INGEST_STALE_HOURS` (default
   36) and `503` otherwise. The dashboard keeps working on old data when the job stops, so
@@ -33,7 +37,7 @@ On a large database, cap query time in PostgreSQL as well:
 ## Docker Compose (single host)
 
 ```bash
-cp .env.example .env        # set AUTH_PROVIDER, access lists, IMAP_*, CRON_SECRET, APP_URL
+cp .env.example .env        # set APP_URL, APP_SECRET, IMAP_*; AUTH_PROVIDER and access lists if you use them
 docker compose up -d --build
 ```
 
@@ -41,7 +45,21 @@ This runs PostgreSQL, applies migrations, and serves the dashboard on `127.0.0.1
 TLS reverse proxy (Caddy, nginx, Traefik) on the same host in front of it. To publish the port
 on another address or port, set `WEB_BIND` / `WEB_PORT` in `.env`.
 
-Schedule the jobs from the host's crontab:
+### The worker in serve mode
+
+To read mailboxes set up in the browser (Admin → Mail), start the long-running worker as well.
+It needs `APP_SECRET` in `.env`, the same one the web app uses:
+
+```bash
+docker compose --profile serve up -d
+```
+
+It stops cleanly on `docker compose stop` (it finishes the message in hand). It is a separate
+profile so that a 1.1 setup without `APP_SECRET` keeps starting exactly as before.
+
+### Scheduled jobs
+
+With the mailbox in `IMAP_*` (1.1 style), schedule the jobs from the host's crontab:
 
 ```cron
 0 6 * * *   cd /opt/dmarcscope && docker compose run --rm ingest
@@ -157,6 +175,14 @@ a Python function (`api/cron/ingest.py`) triggered by the crons in `vercel.json`
    call; without it the crons are answered with 401.
 3. Apply migrations from your machine: `DATABASE_URL=… npm run db:migrate`.
 
+Keep `CRON_SECRET` in Vercel's environment even though the owner can also set a machine endpoint
+token in the panel: Vercel Cron sends the environment variable, and the Python ingest function
+reads its configuration from the environment only.
+
+The shipped crons are daily (ingest 06:00, DNS checks 06:30, alerts 07:00 UTC), which is what
+the Hobby plan allows. For faster alert evaluation see [alerts.md](alerts.md). With a Neon
+database from the Vercel integration, use the unpooled connection string for migrations.
+
 Vercel functions have a hard time limit, so the function variant of the ingest job defaults
 to a 170-second mailbox budget per run; a large backlog is worked through over several runs.
 
@@ -165,5 +191,41 @@ to a 170-second mailbox budget per run; a large backlog is worked through over s
 - Upgrade by deploying the new images and running the migration command. Migrations only move
   forward.
 - All state is in PostgreSQL. Back it up with your usual tooling. The data can also be rebuilt
-  from the report emails if you keep them (`IMAP_PROCESSED_FOLDER`).
+  from the report emails if you keep them (`IMAP_PROCESSED_FOLDER`). Back up `APP_SECRET` too:
+  without it, the secrets saved in the panel cannot be decrypted.
 - The ingest job is idempotent: re-processing a report is a no-op.
+
+### From 1.1.x to 2.0
+
+Nothing in the environment has to change.
+
+1. Back up the database.
+2. Run the migrations with the new image (`node scripts/migrate.mjs`). Migrations `0003` to
+   `0006` only add tables, columns and indexes (users, settings, access rules, audit log, setup
+   tokens, invitations, single sign-on connections, mailboxes, monitored domains, worker
+   requests and heartbeats, and two columns on `ingest_runs`); they change no existing data.
+3. Deploy the new web image with the **same environment**. Sign-in, the access lists, the
+   machine endpoints and the dashboards behave exactly as before, and existing sessions stay
+   valid. People who sign in from now on are recorded in the users table, and the request gate
+   reads their role from the database on every request (one indexed query).
+4. Optional, to manage things in the browser from now on:
+   - add `APP_SECRET` (`openssl rand -base64 32`) and open `/setup` with the one-time setup token
+     the new version printed to its log when it first started (after 24 hours it expires; a
+     restart, or opening `/setup`, prints a new one). The wizard creates the owner account (see
+     [authentication.md](authentication.md#first-run-the-setup-wizard));
+   - run `node scripts/settings-import.mjs` to copy `ADMIN_EMAILS`, `ALLOWED_EMAILS`,
+     `ALLOWED_EMAIL_DOMAINS`, `ADMIN_GROUPS` and `ALLOWED_GROUPS` into the database, after which
+     those variables can be removed;
+   - move the mailbox into the panel: add the domains from `ALLOWED_DOMAINS` under Admin →
+     Domains, add the mailbox under Admin → Mail, run `python -m ingestor serve` instead of the
+     scheduled `run`, then remove `ALLOWED_DOMAINS` and `IMAP_*` ([mail.md](mail.md)). The
+     scheduled `run` keeps working unchanged if you leave it.
+
+Rolling back to 1.1.x after step 3 works: 1.1.x ignores the new tables.
+
+### Starting fresh with 2.0
+
+Set `DATABASE_URL`, `APP_URL` and `APP_SECRET`, run the migrations and start the web app. Its log
+prints a one-time setup token; open `/setup` and create the owner account. Then start the worker
+with `python -m ingestor serve` (same `DATABASE_URL` and `APP_SECRET`), add your domains under
+Admin → Domains and your reports mailbox under Admin → Mail.

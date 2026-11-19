@@ -9,4 +9,4 @@ dashboard.
     python -m ingestor enrich           # reverse-DNS backfill only
 """
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"

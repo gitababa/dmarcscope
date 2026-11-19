@@ -5,6 +5,7 @@
 import { sql } from './db'
 import { runDnsChecks, type DnsCheckResults } from './dns-checks'
 import { expandSpf } from './spf'
+import type { DomainScope } from './auth/access'
 import { getObservedDkimSigners } from './queries'
 
 const COOLDOWN_SECONDS = 20
@@ -25,7 +26,7 @@ export function isValidDomainName(domain: string): boolean {
   )
 }
 
-export async function runAndStoreDnsCheck(domain: string, opts: { force?: boolean } = {}): Promise<DnsRunOutcome> {
+export async function runAndStoreDnsCheck(scope: DomainScope, domain: string, opts: { force?: boolean } = {}): Promise<DnsRunOutcome> {
   // Only domains we already hold reports for can be checked — this is not a
   // general-purpose DNS lookup service.
   const rows = await sql<{ id: number; recent: boolean }>`
@@ -45,7 +46,7 @@ export async function runAndStoreDnsCheck(domain: string, opts: { force?: boolea
 
   // Selector and signing domain are copied from reports, i.e. chosen by
   // whoever sent the report: only well-formed names become DNS queries.
-  const signers = (await getObservedDkimSigners(domain)).filter(
+  const signers = (await getObservedDkimSigners(scope, domain)).filter(
     (s) => isValidDomainName(s.signing_domain) && /^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$/i.test(s.selector)
   )
   const [results, spfExpanded] = await Promise.all([

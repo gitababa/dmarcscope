@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/dns-check",
       "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron/alerts",
+      "schedule": "0 7 * * *"
     }
   ],
   "functions": {

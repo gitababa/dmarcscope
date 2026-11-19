@@ -192,6 +192,45 @@ flow, which are new attack surface, so it is the milestone to be slowest on.
    settings with their source (environment / database / default), see users, and read the
    audit log. Full management screens are milestone 2.
 
+### Decisions made while building milestone 1
+
+Clarifications of the decisions above, made where two of them pulled in different directions or
+the plan left a detail open. Each keeps the agreed behaviour.
+
+- **`AUTH_PROVIDER` unset means "sign-in managed in the app"** (owner password + TOTP now, OIDC
+  from the panel in milestone 3). The "only the setup wizard until an owner exists" rule applies
+  in this mode only. A 1.1.0 deployment has `AUTH_PROVIDER` set and no owner, so applying the rule
+  there would break "behaves exactly as before". On those deployments `/setup` is still available
+  (with the token) to create an owner, but nothing is locked behind it.
+- **Rule-admitted roles are re-evaluated on every request.** `users.role_source` (`assigned` /
+  `rule`, a column not in the original list) records whether a role was given to the person or
+  came from an access rule. The effective role is the higher of the assigned role and what the
+  rules give now, so removing someone from `ADMIN_EMAILS` (or deleting a rule) still removes the
+  access it gave, as in 1.1.0. A disabled row overrides everything.
+- **Further schema details:** `users.totp_last_step` (makes each TOTP code single-use);
+  `auth_throttle` (per-address counts, and per-address-typed counts for unknown accounts so a
+  lockout does not reveal whether the account exists); `config_version` as a separate one-row
+  table (bumped in the write's transaction, so a reader can never cache new data under an old
+  version); `setup_tokens.expires_at` is NULL for a `SETUP_TOKEN`-supplied token. The audit log
+  has no foreign key to `users` (so deleting a user never rewrites history) and a trigger refuses
+  `UPDATE` and `DELETE`.
+- **Envelope format:** version byte `0x01`, 4-byte key id (HKDF of `APP_SECRET`), 12-byte nonce,
+  ciphertext and tag, base64url. Keys per purpose (`setting`, `totp`) via HKDF; the AAD binds the
+  header, the purpose and the record (`cron.secret`, `user:42`). `lib/envelope.mjs` is plain
+  JavaScript so the command-line scripts can use it without a build step.
+- **Pre-sign-in forms are route handlers** (`/setup/*`, `/auth/password`,
+  `/auth/second-factor`) with plain HTML forms, an `Origin` check and 303 redirects, so they work
+  without JavaScript and can be driven by the end-to-end tests. Server actions remain the rule for
+  signed-in mutations.
+- **Registered settings in milestone 1** are only those something reads through the store:
+  `app.name`, `ingest.stale_hours`, `session.max_age_hours`, `cron.secret` (owner-only, secret).
+  Registering a setting nothing reads would show a control that does nothing.
+- **Client address** for per-address limits and the audit log comes from `CLIENT_IP_HEADER`
+  (default: last `X-Forwarded-For` entry), because Next.js keeps a client-sent `X-Forwarded-For`.
+  Per-account lockout does not depend on it.
+- **QR code:** `qrcode-generator` (MIT, no dependencies; checked upstream) renders the TOTP
+  enrolment code server-side as an SVG path.
+
 ### Done when
 
 - [ ] A fresh database plus the three required variables leads to `/setup`, and completing
@@ -225,9 +264,89 @@ Done when: each action and each guard rail has a test for its refusal; the panel
 with keyboard only and at phone width; an admin who is demoted mid-session loses the panel
 on their next request.
 
+### Design
+
+**Data model (migration `0004`).**
+- `users.invited_at`, `users.invited_by`: an invitation is a `users` row with
+  `status = 'pending'`, `role_source = 'assigned'`, the invited role, and `invited_at` set.
+  A pending row without `invited_at` is a request (someone signed in and no rule admitted
+  them).
+- Indexes for the audit viewer's filters: `audit_log (action, id)`,
+  `audit_log (lower(actor_email), id)`.
+- No new status: rejecting a request sets `status = 'disabled'` (they stay refused, and an
+  administrator can re-enable them later), and the audit log says it was a rejection.
+
+**Who may do what.** Roles rank viewer < admin < owner. All of this needs admin or owner.
+- An actor may change only a user whose role is at or below their own. An admin cannot touch
+  an owner.
+- An actor may grant only a role at or below their own. Only an owner can make an owner.
+- Nobody can disable or remove themselves. Signing yourself out everywhere is allowed.
+- The last active owner cannot be demoted, disabled or removed. "Last" is decided inside the
+  transaction, with the owner rows locked (`FOR UPDATE`), so two owners demoting each other at
+  once cannot leave none.
+- The same rank rules apply to access rules: an admin can add rules for admin or viewer.
+  Rules never grant owner (as in milestone 1).
+
+**Sign-in for invited and approved people.** At the next request after an invitation,
+`resolveAccess` finds the pending, invited row, makes it `active`, and records
+`invitation_accepted`. Approving a request sets the chosen role (`assigned`) and makes the
+row active. Both take effect on that person's next request. Invitations only matter for
+people who sign in through SSO or a proxy. No email is sent: "invite" pre-approves an
+address, and there is no mail delivery until milestone 5.
+
+**Actions** (server actions; each re-checks the caller's role, runs in one transaction with
+the target row locked, writes an audit entry, and writes an audit entry for a refusal too).
+`lib/people.ts` holds the logic, so it can be tested against the database without Next.js.
+
+| Action | Effect | Refused when |
+|---|---|---|
+| invite | new pending row with role, `invited_at` | address invalid or already known; role above caller |
+| approve | pending request → active, chosen role | not a pending request; role above caller |
+| reject | pending request → disabled | not pending |
+| change role | role, `role_source = 'assigned'` | target above caller; role above caller; last owner |
+| disable / enable | status | target above caller; self (disable); last owner (disable) |
+| sign out everywhere | `sessions_valid_after = now()` | target above caller |
+| remove | delete the row (history stays in the audit log) | target above caller; self; last owner |
+| add rule / delete rule | `access_rules` (+ `config_version` bump) | invalid value; duplicate; role above caller |
+
+**Screens** (all admin-only; plain forms that work without JavaScript and with the keyboard
+alone; usable at 375px):
+- `/admin/users`: pending requests first (approve with a role, or reject); then everyone,
+  with search (address or name), filters (status, role, sign-in source) and pages of 50; an
+  invite form.
+- `/admin/users/[id]`: one person: role, status, source, last sign-in, invited by, lockout.
+  Change role, disable or enable, sign out everywhere, remove (with a confirmation step).
+  Only the actions the caller may take are shown. The server checks again anyway.
+- `/admin/rules`: database rules (add, delete) and, read-only, the rules that come from the
+  environment.
+- `/admin/audit`: filters (action, actor, target, from/to date), pages, and "Download CSV"
+  (`GET /admin/audit/export` with the same filters). The export is admin-only, capped at
+  100,000 rows, and recorded in the audit log. Cells that a spreadsheet would read as a
+  formula (`=`, `+`, `-`, `@`, tab, CR) are prefixed with `'`, because the audit log holds text
+  strangers typed.
+
+**Failure cases.** A user changed between page load and submit (role, status, deleted) is
+re-read inside the transaction, so the decision is made on current data. The panel then
+reports "changed meanwhile, see the current state". A demoted admin's next request has the
+lower role (no cache), so the panel is gone. Search input is bound as a parameter, and
+`%`/`_` are escaped for `ILIKE`.
+
+**Built as designed**, plus:
+- An admin cannot delete a rule that grants a role above their own. Rules grant only admin and
+  viewer, so in practice this never refuses anyone today.
+- Every action re-reads the caller's own account inside its transaction. If it was disabled or
+  removed since the request started, the action is refused.
+- Approve and reject also apply the rank rule: a request an owner raised to owner is not an
+  admin's to decide. Enabling a user makes their role `assigned`, so a re-enabled rejected
+  request actually gets in. An invitation lets someone in only if accepting it succeeded;
+  otherwise the current row decides.
+- On a confirmation step, keyboard focus moves to the confirming button. This is a small client
+  component, because React does not apply `autoFocus` to server-rendered HTML.
+
 ## Milestone 3 — Admin panel: SSO
 
-OIDC connection form with presets (Google, Microsoft Entra ID, Okta, Keycloak, generic):
+OIDC connection form with presets (Google, Microsoft Entra ID, Okta, generic; no Keycloak
+preset, by the owner's decision during milestone 3; Keycloak works through the generic preset):
 issuer, client id, client secret, scopes, email claim, groups claim, required claims,
 button label. "Test" runs a real authorization-code flow in a new window against the
 unsaved-as-active configuration and shows the claims that came back and which rule would
@@ -240,6 +359,89 @@ required claims, https issuer). The owner's local sign-in always remains availab
 Done when: a misconfigured connection (wrong secret, unreachable issuer, wrong redirect
 URI) cannot be activated and cannot lock anyone out, shown by tests; switching providers
 does not invalidate the owner's access; documentation has a walkthrough per preset.
+
+### Design
+
+**Where it applies.** The panel manages SSO only when sign-in is managed in the app
+(`AUTH_PROVIDER` unset). With `AUTH_PROVIDER=oidc`, the `OIDC_*` variables define the connection:
+the SSO page shows it as "managed by environment" and offers no edits. Proxy modes have no SSO
+page.
+
+**Data model (migration `0005`).** Table `sso_connections`:
+- `state`: `draft` or `active` (or `retired`). At most one row in each of `draft` and `active`,
+  enforced by partial unique indexes.
+- The connection itself: `preset`, `issuer`, `client_id`, `client_secret` (an encrypted
+  envelope bound to the row, or NULL for a public client), `scopes`, `email_claim`,
+  `groups_claim`, `required_claims`, `button_label`.
+- `revision`: incremented on every save of the draft.
+- `last_test` (JSONB): ok or failed, when, by whom, the revision it tested, the error code, the
+  claims that came back (minus tokens), and which rule would admit that person.
+- Audit columns.
+
+The active connection is part of the cached settings snapshot, so every instance picks up an
+activation within `SETTINGS_CACHE_SECONDS`.
+
+**Lifecycle (owner only).**
+1. *Edit*: there is one draft. Starting an edit copies the active connection into a new draft;
+   the secret is decrypted and re-encrypted for the new row. Saving validates the form and bumps
+   `revision`. A saved draft changes nothing about how anyone signs in.
+2. *Test*: opens in a new window. `/auth/sso-test` runs the real authorization-code flow (PKCE,
+   state, nonce) against the draft, and comes back to the same `/auth/callback`. The login-state
+   cookie marks the attempt as a test and carries the draft id, the revision and the owner's id.
+   A test callback never issues or changes a session and never creates users. It only records
+   `last_test`, and only if the caller is still that same owner. Every 1.1.0 rule applies:
+   verified email, the email from exactly one claim, required claims, https issuer.
+3. *Activate*: allowed only when `last_test` succeeded **for the current revision** within the
+   last 24 hours. In one transaction the previous active connection is retired, the draft becomes
+   active, `config_version` is bumped, and an audit entry is written.
+4. *Deactivate*: retires the active connection. Sign-in falls back to the owner's password.
+
+**Switches** (registry settings, owner-only, environment-overridable):
+- `auth.local_signin_non_owners` (`AUTH_LOCAL_SIGNIN_NON_OWNERS`, default off). Lets non-owners
+  who have a password and TOTP (in practice: a former owner) use the password sign-in.
+- `auth.enforce_sso` (`AUTH_ENFORCE_SSO`, default off). Non-owners must use SSO; the sign-in page
+  hides the password form behind "Owner sign-in". It applies only while a connection is active,
+  so it can never leave people with no way in.
+
+**Never locked out.**
+- The owner's password + TOTP sign-in is always available, whatever the switches or the state of
+  the connection.
+- A connection that breaks after activation (provider down, secret rotated) only makes the SSO
+  button fail with an error; the owner signs in locally and fixes or deactivates it.
+- Activating or switching a connection does not touch sessions or `users`, so the owner's (and
+  everyone's) access is unchanged.
+
+**Sign-in with the active connection.** The sign-in page shows the button (`button_label`).
+`/auth/login` and `/auth/callback` use the active connection from the snapshot. The callback
+resolves the person exactly as in milestone 1 (rules, pending requests, invitations), records
+them as `source = 'oidc'`, and always puts their user id in the session cookie.
+
+**Failure cases, all tested.**
+- An unreachable issuer, or a discovery document whose issuer does not match: the test fails at
+  the start.
+- A wrong client secret: the token request is refused.
+- A wrong redirect URI: the provider refuses, or returns an error to the callback.
+- An unverified email, a missing email claim, a required claim that does not match.
+- A test for an older revision, or one that is too old: activation is refused.
+- A test callback presented with a different session, or with no session: no result is
+  recorded.
+
+**Presets** fill in the issuer pattern and claims, with notes:
+- Google: `email`, `hd` recommended.
+- Microsoft Entra ID: `preferred_username`, groups are object IDs, single-tenant issuer.
+- Okta: `email`, `groups`.
+- Generic.
+
+`docs/sso.md` has a walkthrough per preset.
+
+**Built as designed, plus:**
+- The test is started by a same-origin form post (`POST /auth/sso-test`), so another site cannot
+  make the owner's browser start one.
+- Admins see only whether the draft passed; the details are the owner's.
+- Required claims must come from the signed ID token. A value from UserInfo no longer counts;
+  this applies to environment connections too.
+- The presets' placeholders are refused, including Google's `hd=example.com`.
+- No Keycloak preset, by the owner's decision; Keycloak works through the generic preset.
 
 ## Milestone 4 — Admin panel: mail and domains
 
@@ -262,6 +464,157 @@ environment variables; credentials are never readable through the web app; killi
 worker mid-run leaves a closed, failed run and the next run proceeds; an environment-
 configured 1.1.0 worker still runs unchanged.
 
+### Research: unattended access to a shared mailbox (done before building)
+
+**Microsoft 365.** Use the OAuth 2.0 **client-credentials grant** with the **`IMAP.AccessAsApp`**
+application permission of *Office 365 Exchange Online*. Setup:
+1. Grant tenant admin consent.
+2. Register the app's service principal in Exchange with `New-ServicePrincipal`.
+3. Allow it into the reports mailbox, and only that mailbox, with
+   `Add-MailboxPermission -AccessRights FullAccess`.
+
+The token is requested with scope `https://outlook.office365.com/.default`. IMAP authenticates with
+SASL `XOAUTH2` (`user=<mailbox>^Aauth=Bearer <token>^A^A`), naming the shared mailbox as the user.
+Chosen over Microsoft Graph `Mail.Read` because Graph's application permission is tenant-wide
+until narrowed by RBAC for Applications (Application Access Policies are legacy), whereas
+mailbox permissions scope IMAP access to one mailbox by construction. Client secrets last at most
+24 months (Microsoft recommends under 12), so the panel shows the secret's age.
+Sources:
+- [Authenticate an IMAP, POP or SMTP connection using OAuth](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth)
+- [Role Based Access Control for Applications in Exchange Online](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)
+- [Application Access Policies (legacy)](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-access-policies)
+- [Add and manage app credentials](https://learn.microsoft.com/en-us/entra/identity-platform/how-to-add-credentials)
+
+**Google Workspace.** Use a **service account with domain-wide delegation**. A Workspace super
+admin authorizes its client ID for the scope `https://mail.google.com/` in the Admin console. The
+worker signs an RS256 JWT:
+- `iss` = the service account,
+- `sub` = the reports mailbox,
+- `aud` = `https://oauth2.googleapis.com/token`,
+- `exp` at most one hour after `iat`.
+
+It exchanges the JWT with the `urn:ietf:params:oauth:grant-type:jwt-bearer` grant and logs in to
+IMAP with `XOAUTH2`. Domain-wide delegation lets the key act as *any* user of the domain for that
+scope, so the documentation asks for a dedicated service account used only here, with no other
+scopes, and treats the key as the most sensitive secret in the deployment. (The narrower
+`gmail.imap_admin` scope is for admin access and is not needed.) The JWT is signed with
+`cryptography`, which the worker already depends on, rather than adding Google's client
+libraries; the token exchange is tested against a mock endpoint that verifies the signature.
+Sources:
+- [Using OAuth 2.0 for Server to Server Applications](https://developers.google.com/identity/protocols/oauth2/service-account)
+- [IMAP, POP, and SMTP: OAuth 2.0 mechanism (XOAUTH2)](https://developers.google.com/workspace/gmail/imap/xoauth2-protocol)
+
+**Not verified without a real tenant.** Everything above is tested against local stand-ins
+(a TLS IMAP server and token endpoints). Until the owner provides a Microsoft 365 and a Google
+Workspace tenant, both providers are labelled *unverified* in the pull request and in
+`docs/mail.md`.
+
+### Design
+
+**Data model (migration `0006`).**
+- `mailboxes`:
+  - `kind`: `imap` (password), `microsoft` or `google`;
+  - `name`, `enabled`;
+  - connection details: `host`, `port`, `security`, `username`, `folder`, `processed_folder`,
+    `invalid_folder`;
+  - provider IDs: `tenant_id`, `client_id`;
+  - `secret`: the password, client secret or service-account key as an encrypted envelope,
+    purpose `mailbox`, bound to the row;
+  - `secret_updated_at`;
+  - `interval_minutes` (15 to 1440, default 60);
+  - audit columns.
+- `monitored_domains (name, created_by, created_at)`. This replaces `ALLOWED_DOMAINS`, which,
+  when set, still wins and makes the list read-only.
+- `ingest_runs` gains `mailbox_id` (NULL for environment-configured runs and imports) and
+  `trigger` (`schedule`, `manual`, `environment`).
+- `worker_jobs`:
+  - `kind`: `test` or `run`;
+  - `mailbox_id`;
+  - `status`: `queued`, `running`, `done`, `failed`;
+  - `requested_by`, `requested_at`, `claimed_by`, `claimed_at`, `finished_at`;
+  - `result` (JSONB: a short outcome and message, never a secret).
+- `worker_heartbeats (worker_id, hostname, version, started_at, seen_at)`, so the panel can say
+  whether a worker is running.
+- Setting `ingest.retention_days` (`RETENTION_DAYS`), read by the worker with the same
+  resolution: environment, then database, then default.
+
+**Credentials are never readable through the web app.** The web app encrypts mailbox secrets
+and stores them; it has no code path that decrypts purpose `mailbox` (a test asserts it). Forms
+show "set" or "not set" and take a replacement. Only the worker decrypts, from its own network
+position, as the plan requires.
+
+**Worker `serve` mode** (`python -m ingestor serve`):
+- **Loop:** every few seconds it writes a heartbeat, claims queued jobs
+  (`FOR UPDATE SKIP LOCKED`), and runs every enabled mailbox whose interval has passed since its
+  last scheduled run.
+- **One active run per mailbox:** a run holds a PostgreSQL session advisory lock for that mailbox
+  (`pg_try_advisory_lock`). The lock disappears with the worker's connection, so a run row left
+  open by a killed worker is recognized by the next lock holder and closed as failed
+  (`interrupted`) before the new run starts.
+- **Several workers:** any number may run. Mailboxes and jobs are shared out by the locks, never
+  run twice. Retention and reverse-DNS enrichment run under one global try-lock.
+- **Graceful shutdown:** SIGTERM finishes the current message, closes the run as failed
+  (`interrupted`, so the next run retries what is left), releases the locks and exits 0.
+- **No domains, no ingest:** a mailbox configured in the panel will not ingest while no monitored
+  domain is configured (and `ALLOWED_DOMAINS` is unset). The run fails with a message saying
+  so, rather than accepting reports about any domain.
+- **Unchanged:** `run`, `import` and `enrich`, their JSON and exit codes, and the Vercel adapter
+  keep working from the environment as documented. They also pick up panel-configured monitored
+  domains and retention unless the environment sets them.
+
+**Screens** (admin):
+- **Admin → Mail**: the mailboxes, each with its state (last run, next run, last error) and
+  whether a worker is alive. Add or edit a mailbox with kind-specific fields. **Test
+  connection** and **Run now** queue a job; the page shows "waiting for the worker" until it
+  finishes.
+- **Run history** for a mailbox: each run's counts and its per-message errors. That text comes
+  from strangers' emails, so it is escaped and shortened.
+- **Admin → Domains**: monitored domains (add, remove). `ALLOWED_DOMAINS` is shown read-only when
+  set.
+- Retention is on the settings page.
+
+**Failure cases, all tested.**
+- Wrong password or credentials.
+- Token endpoint refusing.
+- Mailbox unreachable.
+- A message that is not a report, or one that fails to store.
+- The database lost mid-run.
+- The worker killed mid-run: an orphaned run is closed and the next run proceeds.
+- Two workers at once.
+- A job for a mailbox that was deleted meanwhile.
+- No monitored domains.
+
+**Built as designed, plus:**
+- Microsoft 365 and Google mailboxes always connect to `outlook.office365.com` and
+  `imap.gmail.com`. The host is not editable for those kinds, so a token is only ever sent to
+  its provider. Token endpoints are constants; a Google key file's `token_uri` is ignored.
+- A saved secret must be typed again whenever the kind, server, port, security, account, tenant
+  or application changes (found by the security review: otherwise an admin could redirect a
+  saved password to their own server, or a Google key to another user's mailbox).
+- The worker sends heartbeats from a thread, so a run longer than two minutes is not taken for
+  a dead worker.
+- Mailboxes and domains are managed by admins and owners; the caller's role is re-read in the
+  transaction, as in milestone 2. Every change, request and refusal is audited, and a secret is
+  recorded only as `set` / `kept` / `replaced`.
+- The web app's `decryptSecret` refuses any purpose but `setting` and `totp`, and a test scans
+  the web sources for a decryption of `mailbox`. `secrets:reencrypt` is the one exception, run
+  by an operator. It now covers mailbox secrets and the SSO client secret, which it had missed
+  since milestone 3.
+- One waiting request of each kind per mailbox: asking again while one waits returns that one.
+  Requests a worker took and never finished are failed once it has sent no heartbeat for two
+  minutes.
+- Retention and reverse-DNS backfill in `serve` run in whichever run holds the global
+  housekeeping lock; other runs only read their mailbox.
+- `RETENTION_DAYS=0` in the environment still means "keep forever", as in 1.1.0, and wins over
+  the panel.
+- IMAP mailboxes may point at private addresses, since self-hosted mail servers often live
+  there. Folder names are limited to letters, digits, spaces and `. _ - / [ ] & +`.
+- Docker Compose runs `serve` under a `serve` profile, so a 1.1 setup without `APP_SECRET` starts
+  exactly as before.
+- Verified locally against a TLS IMAP stand-in and local token endpoints, including a real
+  `serve` process killed with `SIGKILL` mid-run. **Microsoft 365 and Google are unverified
+  against real tenants.**
+
 ## Milestone 5 — Alerting
 
 Rules: a new source failing DMARC above a volume threshold; compliance for a domain
@@ -272,12 +625,315 @@ webhook. Deduplication, quiet periods, a test button, delivery history.
 Alert text is built from report data: escape it for each channel, and never follow
 redirects or call private addresses from a webhook unless an owner allows it.
 
+Done when: an admin, working only in the browser, sets up SMTP and a Slack-compatible webhook,
+creates one rule of each kind, makes each fire from seeded data, and gets exactly one
+notification per event (the next evaluation sends nothing more); an event that clears is closed;
+the test button and the delivery history (including a failure) work; a webhook aimed at
+`127.0.0.1`, `169.254.169.254` or a redirect is refused; hostile report text is neutralized in
+every channel; two web replicas never send the same alert twice; and a deployment with no rules
+makes no outbound connection and behaves exactly as in milestone 4.
+
+### Design
+
+**Where it runs.** In the web app, in TypeScript, because it needs the compliance queries, the DNS
+check results and the settings store, and the worker is optional (Vercel and cron-only installs
+have none).
+- `lib/alerts/` holds the evaluator, the renderers and the senders.
+- **Scheduling:** a timer started from `instrumentation.ts` evaluates every 5 minutes, only where
+  the process is long-running (not when `VERCEL` is set). `GET|POST /api/cron/alerts`, behind the
+  machine token like the other cron endpoints, does the same for serverless and external
+  schedulers.
+- **Leader safety:** one evaluation at a time across all replicas, under a PostgreSQL try-lock.
+  A second one returns at once.
+- **DNS refresh:** while at least one enabled "record changed" rule exists, the in-process timer
+  also refreshes DNS checks once a day (the existing `runAndStoreDnsCheck`). Without it a
+  self-hosted install with no cron would never have anything to compare.
+- Alerts are system-wide, evaluated with the machine scope. Milestone 6 decides who may *see*
+  them per domain.
+
+**Data model (migration `0007`).**
+- `alert_channels`:
+  - `kind`: `email`, `webhook` or `slack`;
+  - `name`, `enabled`;
+  - `config` (JSONB, not secret): the recipient list for email;
+  - `secret`: an encrypted envelope, purpose `alert`, bound to the row. For `slack` it holds the
+    webhook URL; for `webhook`, the URL and the signing secret; for `email`, nothing;
+  - `secret_updated_at`, audit columns.
+- `alert_rules`:
+  - `kind`: `new_failing_source`, `compliance_drop`, `ingest_stale` or `dns_changed`;
+  - `name`, `enabled`;
+  - `domain` (NULL: every monitored domain);
+  - `params` (JSONB, validated per kind);
+  - `quiet_minutes` (60 to 10080, default 1440);
+  - `notify_resolved` (default false);
+  - audit columns.
+- `alert_rule_channels (rule_id, channel_id)`.
+- `alert_events`: one row per condition.
+  - `rule_id`, `dedupe_key`, `domain`;
+  - `state` (`open` or `resolved`), `first_seen_at`, `last_seen_at`, `resolved_at`;
+  - `last_notified_at`, `reminders_sent`;
+  - `summary` and `detail` (JSONB): short, bounded values, stored as data and escaped when
+    rendered.
+  - A partial unique index on `(rule_id, dedupe_key) WHERE state = 'open'` is what makes
+    deduplication a database fact rather than a convention.
+- `alert_deliveries` is the outbox and the history:
+  - `event_id` (NULL for a test), `channel_id`, `kind` (`alert`, `reminder`, `resolved`, `test`);
+  - `status` (`queued`, `sent`, `failed`), `attempts`, `next_attempt_at`;
+  - `error` (short, never a secret or a response body), `created_at`, `finished_at`.
+- Settings: `smtp.host`, `smtp.port`, `smtp.security` (`ssl` or `starttls`; no plaintext option),
+  `smtp.username`, `smtp.password` (secret), `smtp.from`, and `alerts.allow_private_webhooks`
+  (default false). All owner-only, each with an environment variable (`SMTP_*`,
+  `ALERTS_ALLOW_PRIVATE_WEBHOOKS`).
+- Retention: resolved events and their deliveries older than 180 days are deleted by the
+  evaluator.
+
+**Rules.** Missing data is never read as "all fine" or as "everything failed".
+1. **New source failing** (`min_messages` 100, `window_days` 7): a source IP with at least
+   `min_messages` messages failing DMARC for a domain in the window, and no records for that IP
+   and domain before the window. Key: `domain|ip`. It resolves when the IP stops matching (it
+   ages out of "new", or stops failing).
+2. **Compliance dropped** (`threshold_pct` 95, `min_messages` 100, `window_days` 7): the DMARC
+   pass rate over the window is below the threshold with at least `min_messages` messages. Under
+   `min_messages` there is no verdict, not 0%. Key: `domain`. It resolves when the rate is back
+   at or above the threshold.
+3. **Ingest stale:** uses the existing `getIngestHealth` and the `ingest.stale_hours` setting.
+   `never` (fresh install) is not stale. Key: `ingest`.
+4. **Record changed:** the published DMARC or SPF record text differs between the latest two DNS
+   checks of a domain. A lookup that timed out or failed is not a record and is never compared;
+   NXDOMAIN or "no record" is a real value, so a record that disappeared does alert. A domain with
+   one check has nothing to compare. Key: `domain|dmarc|<hash of the new record>`. It is a
+   one-time event: it resolves after the next check that agrees with the new record. Before
+   building, check how a failed lookup is stored in `dns_checks.results`; if it cannot be told
+   apart from "no record", add an explicit marker (the change is made in `lib/dns-checks.ts` and
+   tested).
+
+**Lifecycle.** Each evaluation, per rule, in its own transaction (a failing rule is recorded
+and the others proceed): compute the current conditions, open new events, update `last_seen_at`
+on continuing ones, resolve events whose condition is gone.
+- A new event queues one delivery per channel of its rule.
+- A still-open event gets a reminder after `quiet_minutes`, repeated at the same interval at most
+  3 times, and then goes quiet until it resolves.
+- A resolved event sends one notice only if `notify_resolved`.
+- Evaluating again with nothing changed queues nothing.
+
+**Delivery.** A sender claims queued deliveries with `FOR UPDATE SKIP LOCKED`, so replicas
+cannot send the same one twice, and runs outside the transaction.
+- A failure schedules a retry after 1, 5 and 30 minutes (4 attempts in all), then stays `failed`.
+- A channel that is down never blocks the others.
+- A secret that cannot be decrypted (a rotated `APP_SECRET`) fails the delivery as "secret
+  unreadable" without retrying.
+- A channel deleted or disabled meanwhile cancels its queued deliveries.
+- A deliberate trade-off: a send that succeeded but whose acknowledgement was lost may be
+  repeated, so delivery is at-least-once. The webhook carries a stable `event_id` for receivers
+  to deduplicate on.
+
+**Channels.**
+- **Email:** an SMTP client written on `node:net` / `node:tls`, since the plan prefers what Node
+  ships, with a stand-in server in the tests.
+  - Certificate verification is always on.
+  - It speaks implicit TLS or STARTTLS, with AUTH PLAIN or LOGIN, plain text bodies and dot
+    stuffing.
+  - Every header value is refused if it contains CR or LF.
+  - The subject is RFC 2047 encoded.
+  - Recipients are validated addresses, at most 10 per channel.
+  - Timeouts: 10 s to connect, 30 s in all.
+  - The SMTP server may be on a private address (relays often are); only an owner can set it.
+- **Webhook (signed):** `POST` of a JSON body with:
+  - `X-DMARCscope-Event-Id`;
+  - `X-DMARCscope-Timestamp`;
+  - `X-DMARCscope-Signature: v1=<hex HMAC-SHA256 of "<timestamp>.<body>">`.
+
+  The documentation shows receivers how to verify it and reject old timestamps.
+- **Slack-compatible:** `POST {"text": ...}` with the characters `& < >` escaped as Slack
+  documents, which also neutralizes `<!channel>` and `<http://...|label>`. Not signed.
+- **Outbound request rules (webhook and Slack, applied on every delivery, not only when saved):**
+  - HTTPS only.
+  - Redirects are never followed: any 3xx is a failure.
+  - The hostname is resolved first, and the request is made to *that* address (the lookup is
+    pinned), so a name cannot change its answer between the check and the connection.
+  - Loopback, private, link-local (including `169.254.169.254`), unique-local, CGNAT,
+    multicast, unspecified and IPv4-mapped forms of these are refused. `alerts.allow_private_webhooks`
+    (owner only) lifts the address rule and also permits `http://`.
+  - 10 s timeout; the response body is read to at most 4 KB and never stored or shown.
+  - The saved URL is never sent back to the browser: forms show "set" and the host only.
+
+**Escaping.** An alert is a structured object, not a string; each channel has a renderer.
+- Fields that came from reports (reverse DNS, organization name, envelope-from, domain) are
+  reduced to printable characters and cut to 200.
+- Email: plain text, with CR and LF removed from anything in a header.
+- Webhook: JSON as data.
+- Slack: escaped as above.
+- The panel: React's escaping.
+- Tests feed each renderer `<!channel>`, `\r\nBcc: x@evil`, a 10 000-character name, control
+  characters, and a markdown or Slack link.
+- The web app's `decryptSecret` gains purpose `alert`, used only by the sender, and the test that
+  scans the web sources for decryptions is extended to allow exactly that one place.
+
+**Screens** (admin and owner; the caller's role is re-read in the transaction, as in
+milestone 2).
+- **Admin → Alerts:**
+  - The evaluator's state: last evaluation, last error, next due.
+  - The open events, and the recent ones with their deliveries.
+  - The rules, each with its channels and open count, and a form to add or edit one with
+    kind-specific fields.
+  - The channels, with **Send test** (rate limited to one per channel every 10 seconds), and a
+    delivery history showing failures with their short error.
+- **Admin → Settings:** the SMTP block, and the private-webhook switch, for the owner.
+- Every change, test and refusal is audited; a secret is recorded only as `set` / `kept` /
+  `replaced`. As in milestone 4, changing a channel's kind or recipient host requires typing its
+  secret again.
+
+**Failure cases, all tested.**
+- SMTP: refused, authentication failure, invalid certificate, timeout, a header-injection attempt.
+- Webhook: 4xx, 5xx, timeout, a redirect, a private target, a name that resolves to a private
+  address, an oversized response.
+- A channel deleted meanwhile; a secret that cannot be decrypted.
+- Two evaluators at once; two senders at once.
+- A rule that throws, with the others still evaluated.
+- Hostile report data in every renderer.
+- A DNS lookup failure not read as a record change; no data not read as 0%.
+- A deployment with no rules makes no outbound connection.
+
+**Unverified until a real service is used:** delivery to a real SMTP provider and to Slack /
+Microsoft Teams / Mattermost incoming webhooks. Tests use local stand-ins; the pull request and
+`docs/alerts.md` say so.
+
 ## Milestone 6 — Enterprise access
 
 Per-domain permissions (users or groups limited to chosen domains) through the single
 authorization function from milestone 1, with a test that every query path is filtered.
 SCIM 2.0 provisioning (users and groups; deactivation is immediate). API tokens with
 scopes and expiry, a read-only JSON API, CSV export.
+
+### Decisions made while designing (change them here if the owner disagrees)
+
+1. **Only viewers can be limited to domains.** Admins manage mail, domains, alerts and
+   people for the whole deployment; a "domain-limited admin" could not do any of that
+   without seeing everything. `owner` and `admin` always get every domain. Making a
+   limited viewer an admin lifts the limit, and the screen says so before it happens.
+2. **Today's behaviour is the default.** A viewer with no scope configured sees every
+   domain, as now, so upgrading changes nothing. Limiting is something an administrator
+   does on purpose, per person or per group.
+3. **Missing information is never read as "everything".** The failure that matters: an
+   identity provider that stops sending the group claim must not widen anyone's access.
+   Therefore a deployment-wide setting `access.domain_default` (`all` | `none`, default
+   `all`) decides what a viewer with *no* scope row and no matching group gets; with
+   `none`, a viewer sees no domain until granted one. The Groups screen recommends `none`
+   once any group is limited, and says why. A limited principal with zero grants sees
+   nothing (an empty list is not "all").
+4. **SCIM cannot grant roles.** SCIM-provisioned users are `viewer`. `admin` comes from the
+   panel or from an access rule on a group, as today; `owner` is never reachable from SCIM
+   and SCIM requests that touch an owner are refused.
+5. **API tokens are read-only and never wider than their creator.** A token's scope is its
+   own; its creator must still be an active administrator or owner when it is used, so a
+   disabled, removed or demoted creator makes the token fail at once (built this way because a
+   demoted viewer's scope can depend on group claims that exist only in their browser session).
+6. **No new dependency.** Token hashing, SCIM filters and CSV are written on `node:crypto`
+   and the code already in the repository.
+
+### Data model (migration `0008`)
+
+- `domain_scopes` — `id`, `kind` (`user` | `group`), `principal` (the user id as text, or
+  the lower-cased group name), `mode` (`all` | `limited`), `updated_at`, `updated_by`;
+  unique on (`kind`, `principal`). No row means "no opinion" (see resolution below).
+- `domain_grants` — `id`, `scope_id` → `domain_scopes` (cascade), `domain` (normalized
+  name, not a foreign key: a grant may precede the domain's first report), unique on
+  (`scope_id`, `domain`).
+- `groups` — `id`, `display_name` (unique, lower-case compare), `external_id`, `source`
+  (`scim` | `local`), `created_at`; `group_members` — (`group_id`, `user_id`) primary key,
+  both cascade. A SCIM group named *X* counts as membership of group *X* for **domain scopes
+  only**, in addition to the groups in the identity provider's claim. It never feeds access
+  rules: a group named like an administrators group must not grant a role.
+- `api_tokens` — `id`, `kind` (`api` | `scim`), `name`, `prefix` (first 8 characters, for
+  display), `token_hash` (SHA-256 of the whole token, unique), `scopes` (`text[]`),
+  `domain_mode` and `domains` (the token's own limit; `limited` with none sees nothing),
+  `created_by` (user id), `created_at`, `expires_at` (required), `last_used_at`,
+  `revoked_at`.
+- `users`: add `external_id TEXT` (SCIM `externalId`), unique where not null.
+- Settings: `access.domain_default`.
+
+**Resolution** (`lib/auth/access.ts`, the only place that decides): role `owner` or `admin`
+→ all domains. Otherwise gather the person's own `domain_scopes` row and the rows of every
+group they belong to (claim groups ∪ SCIM groups). The person's own row wins: `all` → all,
+`limited` → their grants ∪ the grants of their `limited` groups. With no own row: any group
+row `all` → all; otherwise the union of `limited` groups' grants; no rows at all →
+`access.domain_default`. The result is a `DomainScope`: `{kind: 'all'}` or
+`{kind: 'domains', names: [...]}` (possibly empty). It is read per request behind the same
+per-process cache keyed on `config_version` that settings use; every write bumps it, so a
+change applies on every replica within the cache window, and removal of access takes the
+same path as disabling a user.
+
+### Screens
+
+- **Users → one user**: "Domain access" — everyone / only these domains (list with add and
+  remove), plus the groups they belong to and what those add. Refusal text for admins and
+  owners ("always all domains").
+- **Admin → Groups** (new): every known group (SCIM, access rules, scopes) with its mode
+  and domains; the `access.domain_default` switch with the explanation above.
+- **Admin → API access** (new): API tokens (name, scopes, domains, expiry, last used,
+  revoke; the token is shown once on creation) and the SCIM token with the endpoint URL.
+- **Domain page, Overview, Issues**: unchanged for people who see everything; for limited
+  people they list only their domains, and a domain they lack answers 404 (no existence
+  leak). An Export CSV button on the domain and issues pages.
+
+### API (`/api/v1`, bearer token only: no cookies, no CORS, no token in a URL)
+
+`GET /api/v1/domains`, `/domains/{domain}/summary`, `/domains/{domain}/sources`,
+`/domains/{domain}/timeseries`, `/problems`, `/domains/{domain}/dns`, each with `?days=`
+(1–90) and `?format=csv` for the list endpoints. Scopes: `domains:read` (list, summary, timeseries),
+`reports:read` (sources, problems), `dns:read`. Every handler gets its `DomainScope` from
+`authorize`-for-tokens and passes it to `lib/queries.ts`; there is no second code path to
+the data. Errors are JSON with a stable `code`; an unknown, expired, revoked or
+creator-less token is one indistinguishable 401. CSV cells are neutralized against
+spreadsheet formulas the way the audit export does it.
+
+### SCIM 2.0 (`/scim/v2`, bearer = the `scim` token)
+
+`ServiceProviderConfig`, `ResourceTypes`, `Schemas`; `Users` and `Groups` with list (`filter`
+only `userName eq`, `externalId eq`, `displayName eq`; anything else is `400 invalidFilter`;
+`count` ≤ 100), get, create, replace, patch (`add`/`replace`/`remove`, including `active` and
+group `members`), delete. `userName` is the lower-cased e-mail. `active:false` and DELETE
+both set `status = disabled` and `sessions_valid_after = NOW()`, so the person's next request
+fails; re-activation sets `active` again. The existing guard rails apply (never the last
+active owner, never an owner at all). Bodies are capped at 256 KB, member lists at 1000.
+Every change is audited as `scim:<token name>`. Responses use `application/scim+json`
+and SCIM error bodies.
+
+### Failure cases to build and test
+
+- Scope: viewer limited to a domain with another domain's data present: every export of
+  `lib/queries.ts` returns nothing of the other domain (a test lists the module's exports and
+  fails when one has no case, so a new query cannot skip the check); limited with zero
+  grants sees nothing; `domain_default = none` and no row sees nothing; the IdP sends no
+  groups; a viewer promoted to admin; a grant for a domain that does not exist yet; two
+  groups, one `all`; own row beats group rows; a removed grant applies on the next request;
+  a limited user opens another domain's page, CSV and API path → 404.
+- Tokens: expired, revoked, unknown, malformed, wrong scope, creator disabled or demoted,
+  token wider than its creator at creation (refused) and at use (clipped), token in a
+  query string (ignored), token reuse after revocation; only admins create tokens; secret
+  shown once and never stored.
+- SCIM: wrong or missing token, the `api` token used on `/scim` and the reverse (both 401),
+  create an existing e-mail, PATCH to an owner (refused), deactivate then the user's open
+  session fails on its next request, group membership change changes their scope, oversized
+  body, unsupported filter, SCIM user then signing in through OIDC.
+- Upgrade: a 2.0 milestone 5 database gets `0008`; every viewer still sees every domain.
+
+### Done when
+
+- [ ] A viewer can be limited to chosen domains, directly or through a group, and sees
+      exactly those everywhere (overview, issues, domain pages, CSV, API); the every-query
+      test passes and fails when a query ignores its scope.
+- [ ] `access.domain_default` and the "no groups sent" case are tested and explained on
+      the Groups screen.
+- [ ] SCIM users and groups can be provisioned, patched and deprovisioned from a test
+      client; deactivation takes effect on the person's next request.
+- [ ] API tokens: created once, scoped, expiring, revocable, never wider than the creator;
+      the JSON API and CSV export return only what the token's scope allows.
+- [ ] Every refusal above has a test; every new screen was opened in a browser, error states
+      and phone width included; docs, `.env.example` (nothing new is required), CHANGELOG and
+      the upgrade note are written and the upgrade was run; security review done.
+- [ ] Real identity providers' SCIM clients (Okta, Entra ID) were not available: the
+      pull request labels that as unverified.
 
 ## Milestone 7 — SAML (only if requested)
 

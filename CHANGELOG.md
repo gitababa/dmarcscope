@@ -6,6 +6,154 @@ share one version number (`package.json` and `ingestor/__init__.py`).
 Upgrading: deploy the new images, then run the migration command
 (`node scripts/migrate.mjs`) before the new web version starts.
 
+## 2.0.0 (2026-11-19)
+
+2.0 moves configuration into the browser: after deploying with `DATABASE_URL`, `APP_URL` and
+`APP_SECRET`, an administrator sets up everything else in the app. The design and the decisions
+behind it are in `docs/plan-2.0.md`; the sections below list what each part added.
+
+**Upgrading from 1.1.x:** run the migrations and deploy; nothing in the environment has to
+change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
+[docs/deployment.md](docs/deployment.md).
+
+### Added — milestone 1, foundation
+
+- Sign-in managed in the app when `AUTH_PROVIDER` is unset. With no owner yet the app serves only
+  a setup wizard (`/setup`), unlocked by a one-time token printed to the log (or `SETUP_TOKEN`).
+  It creates the owner account: password (scrypt) plus an authenticator app (TOTP), with ten
+  one-time recovery codes. `/setup` is gone once an owner exists.
+- Owner password sign-in, also on `oidc` deployments ("Owner sign-in" on the sign-in page), with
+  per-account and per-address lockout that does not reveal whether an account exists.
+- Roles `owner`, `admin`, `viewer`, read from the database on every request. Everyone who signs in
+  is recorded; someone no rule admits becomes a pending request. Disabling a user, changing their
+  role or setting `sessions_valid_after` applies on their next request.
+- Access rules in the database (email domain or group → role), next to the environment lists,
+  which keep working unchanged. `npm run settings:import` copies the lists into the database.
+- Settings store: environment variable, else the value saved in the panel, else the default;
+  validated, cached per instance for `SETTINGS_CACHE_SECONDS` and picked up by every instance
+  without a restart. First settings: application name, ingest staleness, session length and the
+  machine endpoint token (`APP_NAME`, `INGEST_STALE_HOURS`, `SESSION_MAX_AGE_HOURS`,
+  `CRON_SECRET`).
+- Secrets saved in the database are encrypted (AES-256-GCM, keys derived from `APP_SECRET`), in a
+  format the ingest worker reads too. `APP_SECRET_PREVIOUS` and `npm run secrets:reencrypt` rotate
+  `APP_SECRET`.
+- Audit log in the database (append-only; the database refuses changes), shown under
+  **Admin → Audit log**. The JSON audit lines on stdout stay.
+- A minimal **Admin** area: settings with where each value comes from, users, audit log.
+- `APP_SECRET`, `APP_SECRET_PREVIOUS`, `SETUP_TOKEN`, `SETTINGS_CACHE_SECONDS`,
+  `CLIENT_IP_HEADER`.
+
+### Added — milestone 2, people
+
+- **Admin → Users**: pending requests (approve with a role, or reject), search and filters,
+  invitations, and per person: change role, disable and enable, sign out everywhere, remove.
+- **Admin → Access rules**: add and delete email-domain and group rules; the environment's rules
+  are shown read-only.
+- **Admin → Audit log**: filters (action, who, target, dates) and CSV download.
+- Guard rails: an admin cannot change an owner or grant a role above their own; nobody can
+  disable or remove themselves; the last active owner cannot be demoted, disabled or removed.
+  Every change and every refusal is audited.
+- Migration `0004` (invitations, audit log indexes).
+
+### Added — milestone 3, single sign-on in the panel
+
+- **Admin → Sign-in** (owner): an OpenID Connect connection from a preset (Google, Microsoft
+  Entra ID, Okta, or any other provider). A draft is tested with a real sign-in in a new
+  window, which shows the claims that came back and which rule would admit that person. Only a
+  passed test of the draft as saved, less than a day old, can activate it. Walkthroughs per
+  provider in [docs/sso.md](docs/sso.md).
+- Switches: password sign-in for non-owners (`AUTH_LOCAL_SIGNIN_NON_OWNERS`), require single
+  sign-on (`AUTH_ENFORCE_SSO`). The owner's password sign-in is never affected.
+- Migration `0005` (`sso_connections`).
+
+### Added — milestone 4, mail and domains
+
+- **Admin → Mail**: reports mailboxes set up in the browser: IMAP with a password, Microsoft 365
+  (an app registration with `IMAP.AccessAsApp`, client credentials) and Google Workspace (a
+  service account with domain-wide delegation), both over `XOAUTH2`. **Test connection**, **Run
+  now**, pause, and each mailbox's run history with its problems. Step by step in
+  [docs/mail.md](docs/mail.md). The Microsoft 365 and Google paths are **unverified** against
+  real tenants so far.
+- **Admin → Domains**: the monitored domains, replacing `ALLOWED_DOMAINS` (which still wins when
+  set). A mailbox set up in the browser reads nothing until a domain is listed.
+- Retention in the panel (`ingest.retention_days`, or `RETENTION_DAYS` as before).
+- `python -m ingestor serve`: a long-running worker that reads the panel's mailboxes on their
+  schedules and carries out the panel's requests. Any number may run (one run per mailbox at a
+  time); a killed worker's run is closed as failed by the next one; `SIGTERM` stops after the
+  current message. Docker Compose: `docker compose --profile serve up -d`.
+- Migration `0006` (`mailboxes`, `monitored_domains`, `worker_jobs`, `worker_heartbeats`;
+  `ingest_runs.mailbox_id` and `trigger`).
+
+### Added — milestone 5, alerting
+
+- **Admin → Alerts:** rules for a new source failing DMARC above a volume threshold, compliance
+  for a domain dropping below a threshold, ingest going stale, and a published DMARC or SPF record
+  changing. Channels: email (SMTP settings in Admin → Settings, owner-only; TLS always, certificate
+  always verified), a signed webhook (HMAC-SHA256 over `timestamp.body`) and Slack-compatible
+  webhooks. See [docs/alerts.md](docs/alerts.md).
+- Deduplication (one open event per condition, enforced by a unique index), quiet periods with up
+  to three reminders, optional "cleared" notices, a **Send test** button and a delivery history
+  with retries (1, 5, 30 minutes) and short errors.
+- Evaluated every five minutes by the web app where it runs as a long-running process, and by
+  `GET|POST /api/cron/alerts` (bearer token) on serverless deployments; one evaluation at a time
+  across replicas.
+- Webhook addresses and signing secrets are stored encrypted (purpose `alert`) and never shown
+  again; `secrets:reencrypt` covers them. Outbound requests refuse private, loopback and
+  link-local destinations, redirects and non-https addresses unless the owner allows it, on every
+  delivery, and connect to the address they validated.
+- DNS checks now record `lookup_failed` for a DMARC or SPF lookup that timed out, so a timeout is
+  never mistaken for a record that was removed.
+- Upgrading from the previous 2.0 milestone: run the migrations (`0007`). With no rules nothing
+  changes and nothing is sent.
+
+### Added — milestone 6, enterprise access
+
+- **Per-domain permissions:** limit a viewer, directly or through a group, to chosen domains
+  (Admin → Users, Admin → Groups). Every query in `lib/queries.ts` filters by the caller's scope, a
+  test fails if one does not, and a domain outside the scope answers "not found". Administrators and
+  owners always see everything. A limited setting with no domains sees nothing, and the new setting
+  `access.domain_default` (`ACCESS_DOMAIN_DEFAULT`, `all` by default, `none` recommended once groups
+  are limited) decides what a viewer with no scope sees, so a missing group claim cannot widen
+  anyone's access. See [docs/enterprise.md](docs/enterprise.md).
+- **SCIM 2.0** (`/scim/v2`): users and groups, behind a token only an owner creates. Provisioned
+  people are viewers; SCIM cannot set roles, rename an e-mail address or touch an owner;
+  deactivating (`active:false` or `DELETE`) takes effect on the person's next request. SCIM groups
+  count for domain scopes only, never for access rules.
+- **API tokens and a read-only JSON API** (`/api/v1`): scopes (`domains:read`, `reports:read`,
+  `dns:read`), required expiry, domain limits, revocation, never wider than the creator; only the
+  token's SHA-256 is stored and the token is shown once. `format=csv` and CSV downloads on the domain
+  and Issues pages, with spreadsheet formulas neutralized.
+- Migration `0008` (`domain_scopes`, `domain_grants`, `groups`, `group_members`, `api_tokens`,
+  `users.external_id`). Upgrading changes nothing for anyone until an administrator uses a feature.
+
+### Security
+
+- Required claims (`OIDC_REQUIRED_CLAIMS`, and those of a panel connection) must be in the signed ID
+  token; a value from the UserInfo endpoint no longer satisfies them.
+- Mailbox passwords, client secrets and keys saved in the browser are encrypted for the worker
+  only: the web app has no way to decrypt them. OAuth tokens are only ever sent to the
+  provider's own IMAP server, and token endpoints are fixed in code (a key file's `token_uri` is
+  ignored).
+- `npm run secrets:reencrypt` now also re-encrypts the single sign-on client secret, which it
+  previously missed, and mailbox secrets.
+
+### Changed
+
+- `AUTH_PROVIDER` is optional: unset now means "sign-in managed in the app" instead of a
+  configuration error.
+- `SESSION_SECRET` is optional when `APP_SECRET` is set. Where it is set it is used exactly as
+  before, so upgrading signs nobody out.
+- The request gate reads the user's role from the database (one indexed query per request). If
+  the database cannot be reached, pages and `/api` answer 503 instead of letting anyone in.
+  `/api/healthz` still needs no database.
+- A non-numeric `INGEST_STALE_HOURS` or `SESSION_MAX_AGE_HOURS` is reported as an error (in the
+  log and on the settings page) instead of silently becoming the default; out-of-range numbers
+  are still clamped as before.
+- With `AUTH_PROVIDER=none` every visitor has the owner role (previously admin).
+- The ingest worker needs `cryptography` (pinned in `requirements.txt`).
+- `run`, `import` and `enrich` also use the monitored domains and retention saved in the panel
+  when `ALLOWED_DOMAINS` / `RETENTION_DAYS` are not set.
+
 ## 1.1.0
 
 Hardening and fixes from a full code review. **Read "Changed" before upgrading.**

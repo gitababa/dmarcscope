@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 from dataclasses import dataclass
+from typing import Callable
 
 
 class ConfigError(RuntimeError):
@@ -54,6 +55,10 @@ class Settings:
     mail_budget_seconds: int = 600
     enrich_budget_seconds: int = 60
 
+    # OAuth mailboxes (milestone 4): returns the SASL XOAUTH2 initial response
+    # with a fresh token. When set, it is used instead of the password.
+    imap_xoauth2: Callable[[], bytes] | None = None
+
     @property
     def cutoff(self) -> dt.datetime | None:
         """Effective retention cutoff (UTC), combining both retention settings."""
@@ -70,7 +75,7 @@ class Settings:
             for name, val in (
                 ("IMAP_HOST", self.imap_host),
                 ("IMAP_USER", self.imap_user),
-                ("IMAP_PASSWORD", self.imap_password),
+                ("IMAP_PASSWORD", self.imap_password or self.imap_xoauth2),
             )
             if not val
         ]

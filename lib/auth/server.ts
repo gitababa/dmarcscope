@@ -2,9 +2,14 @@
 
 import { cache } from 'react'
 import { cookies, headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { authProvider, authenticate } from './index'
-import type { AuthResult, Session } from './types'
+import { notFound, redirect } from 'next/navigation'
+import { type Actor, recordAudit } from '../audit'
+import { clientIp } from '../client-ip'
+import { getPool } from '../db'
+import { type Access, authorize } from './access'
+import { authProvider, authenticate, hasSignInPage } from './index'
+import { atLeast } from './roles'
+import type { AuthResult, Role } from './types'
 
 // One authentication per request, however many components ask.
 export const getAuth = cache(async (): Promise<AuthResult> => {
@@ -12,21 +17,52 @@ export const getAuth = cache(async (): Promise<AuthResult> => {
   return authenticate({ headers: h, cookie: (name) => c.get(name)?.value })
 })
 
-// For pages: returns the session or redirects away.
-export async function requireViewer(): Promise<Session> {
-  const auth = await getAuth()
-  if (auth.status === 'ok') return auth.session
-  if (auth.status === 'unauthenticated' && authProvider() === 'oidc') redirect('/login')
+function redirectAway(auth: AuthResult): never {
+  if (auth.status === 'setup_required') redirect('/setup')
+  if (auth.status === 'unauthenticated' && hasSignInPage(authProvider())) redirect('/login')
   redirect('/denied')
 }
 
-// For actions and route handlers: null unless the caller is an admin.
-export async function getAdminSession(): Promise<Session | null> {
+// The caller's access (role and visible domains), worked out once per request.
+const accessFor = cache(async (): Promise<Access | null> => {
   const auth = await getAuth()
-  return auth.status === 'ok' && auth.session.role === 'admin' ? auth.session : null
+  return auth.status === 'ok' ? authorize(auth.session) : null
+})
+
+// For pages: the caller's access (role and visible domains), or a redirect.
+export async function requireViewer(): Promise<Access> {
+  const access = await accessFor()
+  if (access) return access
+  redirectAway(await getAuth())
 }
 
-// Structured audit line on stdout, for whatever log pipeline the deployment has.
-export function audit(event: string, fields: Record<string, unknown>): void {
-  console.log(JSON.stringify({ level: 'info', type: 'audit', event, time: new Date().toISOString(), ...fields }))
+// For pages that need more than viewing. Someone signed in with too low a
+// role sees "not found", which says nothing about what is there.
+export async function requirePageRole(minimum: Role): Promise<Access> {
+  const access = await requireViewer()
+  if (!atLeast(access.role, minimum)) notFound()
+  return access
+}
+
+// For actions and route handlers: null unless the caller has the role.
+export async function getAccessWithRole(minimum: Role): Promise<Access | null> {
+  const access = await accessFor()
+  return access && atLeast(access.role, minimum) ? access : null
+}
+
+export async function getAdminSession() {
+  return (await getAccessWithRole('admin'))?.session ?? null
+}
+
+export async function currentActor(): Promise<Actor> {
+  const [auth, h] = await Promise.all([getAuth(), headers()])
+  const ip = clientIp(h)
+  if (auth.status === 'ok') return { userId: auth.session.userId, email: auth.session.identity.email, ip }
+  if (auth.status === 'forbidden') return { userId: null, email: auth.identity.email, ip }
+  return { userId: null, email: null, ip }
+}
+
+// Audit entry for something the current caller did.
+export async function audit(action: string, detail: Record<string, unknown> = {}, target?: string): Promise<void> {
+  await recordAudit(getPool(), { action, actor: await currentActor(), target, detail })
 }

@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 import { signOutAction } from '@/app/actions'
 import { SubmitButton } from '@/components/client'
 import { Logo } from '@/components/ui'
-import { authProvider } from '@/lib/auth'
+import { authProvider, hasSignInPage } from '@/lib/auth'
 import { getAuth } from '@/lib/auth/server'
 
 export const dynamic = 'force-dynamic'
@@ -13,7 +13,8 @@ export default async function DeniedPage() {
   const provider = authProvider()
   const auth = await getAuth()
   if (auth.status === 'ok') redirect('/')
-  if (auth.status === 'unauthenticated' && provider === 'oidc') redirect('/login')
+  if (auth.status === 'setup_required') redirect('/setup')
+  if (auth.status === 'unauthenticated' && hasSignInPage(provider)) redirect('/login')
 
   return (
     <main className="auth-wrap">
@@ -23,10 +24,11 @@ export default async function DeniedPage() {
           <>
             <h1>Access not granted</h1>
             <p>
-              You are signed in as <strong>{auth.identity.email}</strong>, but this account is not on the access list
-              for this dashboard. Ask an administrator to add you, then reload this page.
+              You are signed in as <strong>{auth.identity.email}</strong>, but this account has not been given access
+              to this dashboard. Your request has been recorded; ask an administrator to let you in, then reload this
+              page.
             </p>
-            {provider === 'oidc' && (
+            {hasSignInPage(provider) && (
               <form action={signOutAction}>
                 <SubmitButton className="btn btn-block">Sign out</SubmitButton>
               </form>

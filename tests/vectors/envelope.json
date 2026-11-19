@@ -1,0 +1,73 @@
+{
+  "description": "Secret envelopes (lib/envelope.mjs, ingestor/crypto.py). Both test suites decrypt every case and re-encrypt it with the given nonce to the same bytes. Never use these secrets anywhere else.",
+  "secrets": {
+    "current": "test-vector-app-secret-0123456789-abcdefghij",
+    "previous": "test-vector-previous-secret-9876543210-zyxwvu",
+    "other": "test-vector-unrelated-secret-AAAAAAAAAAAAAAAAAA"
+  },
+  "cases": [
+    {
+      "producer": "typescript",
+      "secret": "current",
+      "purpose": "setting",
+      "context": "oidc.client_secret",
+      "plaintext": "s3cr3t-client-value",
+      "nonce": "000102030405060708090a0b",
+      "envelope": "Aa88HUIAAQIDBAUGBwgJCgunCS5Oj651DbF5JzvaGYhgMKR2xQKfPWbD7gl5i7aazucWzA"
+    },
+    {
+      "producer": "typescript",
+      "secret": "current",
+      "purpose": "totp",
+      "context": "user:42",
+      "plaintext": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+      "nonce": "a0a1a2a3a4a5a6a7a8a9aaab",
+      "envelope": "Aa88HUKgoaKjpKWmp6ipqqsB-rLPzup-Hkn3oRfi5InFvsB6OMDcdiGmFlHxYIXe3d-UBZhOYHiV4p9icHpAiSI"
+    },
+    {
+      "producer": "typescript",
+      "secret": "previous",
+      "purpose": "setting",
+      "context": "imap.password",
+      "plaintext": "pässwörd ✓ with unicode",
+      "nonce": "ffeeddccbbaa998877665544",
+      "envelope": "AbGjjez_7t3Mu6qZiHdmVURDciNnfd-V0DF5_9OVhDNBaXAKVvXfciZT7epSv_lQlVHqf1MIC-DXROvj"
+    },
+    {
+      "producer": "typescript",
+      "secret": "current",
+      "purpose": "setting",
+      "context": "empty.value",
+      "plaintext": "",
+      "nonce": "111111111111111111111111",
+      "envelope": "Aa88HUIRERERERERERERERFIyw6rliI0QvTRN_OMA5zu"
+    },
+    {
+      "producer": "python",
+      "secret": "current",
+      "purpose": "setting",
+      "context": "webhook.url",
+      "plaintext": "https://hooks.example.test/T000/B000/XXXX",
+      "nonce": "0c0d0e0f1011121314151617",
+      "envelope": "Aa88HUIMDQ4PEBESExQVFhcCeKrq5uwtgw7sUPMd_RIubeGO9h6jbjrfRjqklr6T_FPH7EDTwrmOrSZWqxXIhB2m--VP0wOJERY"
+    },
+    {
+      "producer": "python",
+      "secret": "previous",
+      "purpose": "totp",
+      "context": "user:7",
+      "plaintext": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+      "nonce": "deadbeefdeadbeefdeadbeef",
+      "envelope": "AbGjjezerb7v3q2-796tvu_KCsDao726KzxNjjfz1dSYWWktQwGOLgVt6Vg7k-5X3ogsYRXjDT6GSnScRLdXDBk"
+    },
+    {
+      "producer": "python",
+      "secret": "current",
+      "purpose": "setting",
+      "context": "long.value",
+      "plaintext": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx end",
+      "nonce": "5a5a5a5a5a5a5a5a5a5a5a5a",
+      "envelope": "Aa88HUJaWlpaWlpaWlpaWloFOYq8UUswMslI43lRwkh-lHV1OFvkSZx8qmtl5VWfSjmClY9Viu1GsWNEr29G3TklqdKaVZEkukHh-Xq2NwCdJ314oUkORsxRWSx6eLzRflIh1SF7w2TNas78ycMIjuGgWpUwQvIlSNbPesPSR6d_ZSbKsoyEVVH0LEFUdFJoSWCXvu8fl-rOT6InLI6DnR6a0CY6teyShOhaSNIgVyGnL04Ddhs7KAAtPsq_ahakM5TsBRJ94Lhl0bNqv_1ZuNkJk3TacjPaK6H71__rshljLYMIOxSlbtoba5UlWovk4zK2IaoS0E2To1VyLW_l-xlqRSRhQeFC0OsNTBCos9JJ-0fzJcwclmAAKIfuj4mcB_idAceN-o2MyVS338JYomwmLZggpkaq2daICZd1iWwU4m8t_ZRSGuG4H7WDAyCO-NA0D57HPaidThe9mip3iJBQf8Sg7j04Bg-jVHvwC4rBHiiLYNj-joNGGPeJBMxNpYIlBXYK9OdZMUi1hD2-zCmCGU9GbooNl309S6kwgNfl4-2UPFa1tJWcSKRtSYrY24utME1yFL1n8nLzgieeu_lIBeo_RlF37TzSMvi4re1U59LFSav5inak1CaNcPd223WGnhmCKWXQg-4HXx91xzCClOnYAMCQZtxtOpUqfYaiDSxEWxpSnEpAv2VS4REdRh8nM4UyU0MTQnMHRHOOMVSbt1cJSKUayfxoUjWtQMwSQjEUBj4lR9HCAgQNI-3uZSX3jl5X2PnZTAy6rBQIBoEaMWtlPVflWBElpCgIm24AQuD2eEXP2HziY1jCJFzub6URG2RW8lFmbYP-bpmWB9CCwySsnqgvk-c-r3zgpWh37QUpxuY-68Kc2UA2ZCQfpev9LQ7yVpCpkn2zQBhAWCnhQS6z3WK8WLevyGkxMQ6QYLbcmFvIG7qxjfz0VskcF99LwlCy08zBTaIqzqBMhYkitSLTeGLPSiKXEtttAzRYx9kTfxKRff7nkB7C91X4KNXzA7i9zAKJ2dBxFuiJLYBEJAv8lMCxW4OHcfdJ0q3VZJRP9JEXeHgpAojW0iyC6tZTcRWsI3TME4SQHJIUGemdLaHGgNJ7HJApzwkzTzQnCqypzZm_-zI7t4wtQ9CFyhN2zMdh-5KTRLaOhY25JDtbTyvqaR_1qy-6xlyilPvY0S2m8xn_9nrEWqOr90O4rQImwkcJadBbLp_rtCkt-7t7ZARzXipUshDz5UdAkPoIBC79_z6AxqkSaJCEAuAx4NDeEQudBOzjMZG0KHROGZ_nlxImv3hIjlH77QvRl1dOU2cjOSQXelcmlJrm5QTuQKwxpioykDDKt2zr-gayG_joR569JXdy28R8fwA"
+    }
+  ]
+}

@@ -19,7 +19,7 @@ vi.mock('@/lib/queries', () => ({
 }))
 vi.mock('@/lib/dns-run', async (original) => ({
   ...(await original<typeof import('@/lib/dns-run')>()),
-  runAndStoreDnsCheck: async (domain: string) => {
+  runAndStoreDnsCheck: async (_scope: unknown, domain: string) => {
     state.checked.push(domain)
     if (state.fail.has(domain)) throw new Error('resolver down')
     if (domain === 'unknown.example') return { status: 'unknown_domain' }

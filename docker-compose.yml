@@ -3,7 +3,8 @@
 # DATABASE_URL is set here and does not need to be in it.
 #
 #   docker compose up -d                 # database, migrations, dashboard on 127.0.0.1:3000
-#   docker compose run --rm ingest       # one ingest run (schedule this, e.g. from cron)
+#   docker compose --profile serve up -d # also the worker for mailboxes set up in the panel (needs APP_SECRET)
+#   docker compose run --rm ingest       # one ingest run of the IMAP_* mailbox (schedule this, e.g. from cron)
 #   docker compose run --rm ingest import /reports     # load files from ./demo-reports
 
 x-database-url: &database-url postgresql://dmarcscope:${POSTGRES_PASSWORD:-dmarcscope}@db:5432/dmarcscope
@@ -61,6 +62,23 @@ services:
       DATABASE_URL: *database-url
     volumes:
       - ./demo-reports:/reports:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Reads the mailboxes set up under Admin -> Mail; needs APP_SECRET in .env
+  # (the same as the web app's). A profile, so 1.1 setups start as before.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    command: ['serve']
+    profiles: ['serve']
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: *database-url
+    stop_grace_period: 2m
     depends_on:
       migrate:
         condition: service_completed_successfully

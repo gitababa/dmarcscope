@@ -1,0 +1,31 @@
+import Link from 'next/link'
+
+const LINKS = [
+  { href: '/admin', label: 'Settings' },
+  { href: '/admin/users', label: 'Users' },
+  { href: '/admin/rules', label: 'Access rules' },
+  { href: '/admin/sso', label: 'Sign-in' },
+  { href: '/admin/mail', label: 'Mail' },
+  { href: '/admin/domains', label: 'Domains' },
+  { href: '/admin/alerts', label: 'Alerts' },
+  { href: '/admin/groups', label: 'Groups' },
+  { href: '/admin/api', label: 'API access' },
+  { href: '/admin/audit', label: 'Audit log' },
+]
+
+export function AdminNav({ current, pending = 0 }: { current: string; pending?: number }) {
+  return (
+    <nav className="seg admin-nav" aria-label="Administration" style={{ marginBottom: '1rem' }}>
+      {LINKS.map((l) => (
+        <Link key={l.href} href={l.href} aria-current={l.href === current || current.startsWith(`${l.href}/`) && l.href !== '/admin' ? 'true' : undefined}>
+          {l.label}
+          {l.href === '/admin/users' && pending > 0 && (
+            <span className="count" aria-label={`${pending} pending requests`}>
+              {pending}
+            </span>
+          )}
+        </Link>
+      ))}
+    </nav>
+  )
+}

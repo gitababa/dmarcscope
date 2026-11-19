@@ -3,8 +3,10 @@
 
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setDirectoryForTests } from '@/lib/auth/directory'
 import { sealSession, sessionCookieName } from '@/lib/auth/session'
 import { proxy } from '@/proxy'
+import { MemoryDirectory } from '../helpers/memory-directory'
 
 const OIDC = {
   NODE_ENV: 'production',
@@ -21,7 +23,11 @@ function setEnv(env: Record<string, string>) {
   Object.assign(process.env, env)
 }
 
+let dir = new MemoryDirectory()
+
 beforeEach(() => {
+  dir = new MemoryDirectory()
+  setDirectoryForTests(dir)
   for (const k of KEYS) saved[k] = process.env[k]
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -31,6 +37,7 @@ afterEach(() => {
     else process.env[k] = saved[k]
   }
   vi.restoreAllMocks()
+  setDirectoryForTests(null)
 })
 
 // The app listens on an internal address; the public one is APP_URL.

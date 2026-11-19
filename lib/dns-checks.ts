@@ -13,8 +13,10 @@ export type DkimProbe = { selector: string; signing_domain: string }
 export type DnsCheckResults = {
   checked_at: string
   mx: { status: CheckStatus; records: Array<{ exchange: string; priority: number }>; notes: string[] }
-  spf: { status: CheckStatus; record: string | null; notes: string[] }
-  dmarc: { status: CheckStatus; record: string | null; notes: string[] }
+  // lookup_failed: the lookup timed out or the server failed, so `record` says
+  // nothing about what is published (as opposed to null for "no record").
+  spf: { status: CheckStatus; record: string | null; notes: string[]; lookup_failed?: boolean }
+  dmarc: { status: CheckStatus; record: string | null; notes: string[]; lookup_failed?: boolean }
   dkim: {
     status: CheckStatus
     selectors: Array<{ selector: string; signing_domain?: string; found: boolean; observed: boolean }>
@@ -128,6 +130,7 @@ export async function runDnsChecks(domain: string, observedSigners: DkimProbe[])
       }
     }
   } catch (e) {
+    results.spf.lookup_failed = true
     results.spf.notes.push(`SPF lookup failed: ${String(e)}`)
   }
 
@@ -165,6 +168,7 @@ export async function runDnsChecks(domain: string, observedSigners: DkimProbe[])
       }
     }
   } catch (e) {
+    results.dmarc.lookup_failed = true
     results.dmarc.notes.push(`DMARC lookup failed: ${String(e)}`)
   }
 

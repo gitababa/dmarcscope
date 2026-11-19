@@ -1,9 +1,9 @@
 import type { Metadata, Viewport } from 'next'
-import { appName } from '@/lib/config'
+import { getAppName } from '@/lib/settings'
 import './globals.css'
 
-export function generateMetadata(): Metadata {
-  const name = appName()
+export async function generateMetadata(): Promise<Metadata> {
+  const name = await getAppName()
   return {
     title: { default: name, template: `%s · ${name}` },
     description: 'DMARC, SPF and DKIM monitoring for your sending domains.',

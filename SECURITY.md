@@ -18,7 +18,10 @@ and the mailbox and database credentials it is configured with.
 - Every route except the sign-in pages, health probes and bearer-protected machine endpoints
   requires an authorized session. This is enforced in the request proxy and again in each
   page and action.
-- Access is deny-by-default; the access lists are checked on every request. With built-in
+- Access is deny-by-default. Roles (owner, admin, viewer) are read from the database on every
+  request, together with the access rules, so disabling a user, changing a role or revoking
+  sessions applies on the person's next request. A role an access rule gives is re-evaluated
+  every time. With built-in
   OIDC sign-in, the identity and groups are those the provider gave at sign-in and are fixed
   until the session expires (12 hours by default, 7 days at most); `SESSION_NOT_BEFORE`
   invalidates sessions early. See "Removing someone's access" in
@@ -36,7 +39,30 @@ and the mailbox and database credentials it is configured with.
   production.
 - Machine endpoints compare bearer tokens in constant time and are closed when no secret is
   configured.
-- State-changing actions are Next.js server actions, which reject cross-origin requests.
+- State-changing actions are Next.js server actions, which reject cross-origin requests. The
+  sign-in and setup forms that work before anyone is signed in are plain routes that refuse a
+  post whose `Origin` is not `APP_URL`.
+- With no owner yet, only the setup wizard is served (when sign-in is managed in the app). It is
+  unlocked by a one-time token (stored as a digest, 24 hours, single use) and disappears once the
+  owner exists; completing it and checking for an owner happen in one transaction.
+- The owner's password is hashed with scrypt; sign-in also needs a TOTP code (single-use) or a
+  one-time recovery code (stored as digests). Failed attempts lock the account and the client
+  address with exponential backoff, counted in the database. Wrong password, unknown account and
+  ineligible account give the same answer in the same time.
+
+**Secrets at rest**
+
+- Secrets saved in the panel and TOTP seeds are encrypted with AES-256-GCM under keys derived
+  from `APP_SECRET` with HKDF, one per purpose, and bound to the record they belong to. A value
+  that cannot be decrypted is an error, never a fallback. Saved secrets are never sent to the
+  browser, logged or written to the audit log.
+- Mailbox passwords, client secrets and service-account keys saved in the panel can be decrypted
+  only by the ingest worker; the web app encrypts them and has no path that decrypts them.
+  OAuth tokens are only sent to the provider's own IMAP server, and token endpoints are fixed in
+  code. A Google service-account key with domain-wide delegation can read every mailbox in the
+  domain: see [docs/mail.md](docs/mail.md) for how to limit it.
+- The audit log is append-only: the application has no update or delete path and a database
+  trigger refuses both.
 
 **Input handling**
 
@@ -58,8 +84,12 @@ A per-request, nonce-based Content-Security-Policy; `frame-ancestors 'none'`,
 **Operational notes**
 
 - Terminate TLS in front of the app and set `APP_URL` to the https URL.
-- Keep `SESSION_SECRET`, `CRON_SECRET`, `IMAP_PASSWORD` and `DATABASE_URL` in a secret
-  manager. Rotating `SESSION_SECRET` signs everyone out.
+- Keep `APP_SECRET`, `SESSION_SECRET`, `CRON_SECRET`, `IMAP_PASSWORD` and `DATABASE_URL` in a
+  secret manager, and back up `APP_SECRET`. Rotating `SESSION_SECRET` signs everyone out; rotate
+  `APP_SECRET` with `APP_SECRET_PREVIOUS` and `npm run secrets:reencrypt`
+  ([docs/configuration.md](docs/configuration.md)).
+- The per-address sign-in limit trusts the client address your reverse proxy reports
+  (`CLIENT_IP_HEADER`); make the proxy overwrite that header.
 - Give the mailbox account access to the reports mailbox only, and the database user access
   to this database only.
 - Containers run as non-root users.

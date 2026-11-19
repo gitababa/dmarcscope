@@ -1,7 +1,15 @@
 // Built-in sign-in against any OpenID Connect provider (Google, Microsoft
 // Entra ID, Okta, Keycloak, Auth0, Authentik, ...): authorization-code flow
 // with PKCE, state and nonce, handled by the openid-client library.
+//
+// The connection comes from one of two places, described by OidcSettings:
+//   - the environment (AUTH_PROVIDER=oidc, OIDC_*), as in 1.1.0;
+//   - the database (AUTH_PROVIDER unset, configured and tested in the panel,
+//     lib/sso.ts).
+// The same rules apply to both: https issuer, verified email, the address
+// from exactly one claim, required claims.
 
+import { createHash } from 'node:crypto'
 import * as oidc from 'openid-client'
 import { ConfigError, appUrl, envBool, type Env } from '../config'
 import { relevantGroups } from './authz'
@@ -19,76 +27,125 @@ export class LoginError extends Error {
   }
 }
 
-let cached: { key: string; config: Promise<oidc.Configuration> } | null = null
+export type OidcSettings = {
+  issuer: string
+  clientId: string
+  clientSecret: string | null
+  scopes: string
+  emailClaim: string
+  groupsClaim: string
+  requiredClaims: string
+  prompt: string | null
+  // Environment-only switches (trusted): a local test provider over http,
+  // and a provider that does not send email_verified.
+  allowInsecureIssuer: boolean
+  allowUnverifiedEmail: boolean
+}
 
-function getConfiguration(env: Env): Promise<oidc.Configuration> {
+export function oidcSettingsFromEnv(env: Env = process.env): OidcSettings {
   const issuer = env.OIDC_ISSUER?.trim()
   const clientId = env.OIDC_CLIENT_ID?.trim()
-  const clientSecret = env.OIDC_CLIENT_SECRET?.trim()
   if (!issuer || !clientId) {
     throw new ConfigError('AUTH_PROVIDER=oidc requires OIDC_ISSUER and OIDC_CLIENT_ID (and normally OIDC_CLIENT_SECRET).')
   }
-  let issuerUrl: URL
+  return {
+    issuer,
+    clientId,
+    clientSecret: env.OIDC_CLIENT_SECRET?.trim() || null,
+    scopes: env.OIDC_SCOPES?.trim() || 'openid email profile',
+    emailClaim: env.OIDC_EMAIL_CLAIM?.trim() || 'email',
+    groupsClaim: env.OIDC_GROUPS_CLAIM?.trim() || 'groups',
+    requiredClaims: env.OIDC_REQUIRED_CLAIMS ?? '',
+    prompt: env.OIDC_PROMPT?.trim() || null,
+    allowInsecureIssuer: envBool(env.OIDC_ALLOW_INSECURE_ISSUER),
+    allowUnverifiedEmail: envBool(env.OIDC_ALLOW_UNVERIFIED_EMAIL),
+  }
+}
+
+// Checks the issuer before any network request.
+export function issuerUrl(settings: OidcSettings): URL {
+  let url: URL
   try {
-    issuerUrl = new URL(issuer)
+    url = new URL(settings.issuer)
   } catch {
-    throw new ConfigError('OIDC_ISSUER is not a valid URL.')
+    throw new ConfigError('The issuer is not a valid URL.')
   }
-  const insecure = issuerUrl.protocol === 'http:'
-  if (insecure && !envBool(env.OIDC_ALLOW_INSECURE_ISSUER)) {
-    throw new ConfigError('OIDC_ISSUER must use https. (For a local test provider only, set OIDC_ALLOW_INSECURE_ISSUER=true.)')
+  if (url.protocol === 'http:' && !settings.allowInsecureIssuer) {
+    throw new ConfigError('The issuer must use https. (For a local test provider only, set OIDC_ALLOW_INSECURE_ISSUER=true.)')
   }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new ConfigError('The issuer must use https.')
+  return url
+}
 
-  const key = `${issuer}|${clientId}|${clientSecret ? 'secret' : 'public'}`
-  if (cached?.key === key) return cached.config
+const cache = new Map<string, Promise<oidc.Configuration>>()
 
+function getConfiguration(settings: OidcSettings): Promise<oidc.Configuration> {
+  const url = issuerUrl(settings)
+  // The secret is part of the key (as a digest), so replacing it is never
+  // answered from a configuration built with the old one.
+  const secretKey = settings.clientSecret ? createHash('sha256').update(settings.clientSecret).digest('hex') : 'public'
+  const key = `${settings.issuer}|${settings.clientId}|${secretKey}|${settings.allowInsecureIssuer}`
+  const hit = cache.get(key)
+  if (hit) return hit
   const config = oidc
     .discovery(
-      issuerUrl,
-      clientId,
-      clientSecret || undefined,
+      url,
+      settings.clientId,
+      settings.clientSecret || undefined,
       // No secret → public client relying on PKCE alone.
-      clientSecret ? undefined : oidc.None(),
-      insecure ? { execute: [oidc.allowInsecureRequests] } : undefined
+      settings.clientSecret ? undefined : oidc.None(),
+      url.protocol === 'http:' ? { execute: [oidc.allowInsecureRequests] } : undefined
     )
     .catch((err) => {
       // Don't cache a failed discovery (the IdP may just be briefly down).
-      if (cached?.key === key) cached = null
+      cache.delete(key)
       throw err
     })
-  cached = { key, config }
+  if (cache.size > 20) cache.clear()
+  cache.set(key, config)
   return config
+}
+
+// Fetches and validates the provider's discovery document: a test of the
+// issuer before sending anyone there.
+export async function discover(settings: OidcSettings): Promise<void> {
+  await getConfiguration(settings)
 }
 
 export function redirectUri(env: Env = process.env): string {
   return `${appUrl(env)}/auth/callback`
 }
 
-export async function beginLogin(
+export async function beginLoginWith(
+  settings: OidcSettings,
   returnTo: string,
   env: Env = process.env
 ): Promise<{ url: string; state: LoginState }> {
-  parseRequiredClaims(env.OIDC_REQUIRED_CLAIMS) // surface a malformed value before the round trip
-  const config = await getConfiguration(env)
+  parseRequiredClaims(settings.requiredClaims) // surface a malformed value before the round trip
+  const config = await getConfiguration(settings)
   const codeVerifier = oidc.randomPKCECodeVerifier()
   const state = oidc.randomState()
   const nonce = oidc.randomNonce()
 
   const params: Record<string, string> = {
     redirect_uri: redirectUri(env),
-    scope: env.OIDC_SCOPES?.trim() || 'openid email profile',
+    scope: settings.scopes,
     code_challenge: await oidc.calculatePKCECodeChallenge(codeVerifier),
     code_challenge_method: 'S256',
     state,
     nonce,
   }
   // e.g. "select_account" to always show the account chooser
-  if (env.OIDC_PROMPT?.trim()) params.prompt = env.OIDC_PROMPT.trim()
+  if (settings.prompt) params.prompt = settings.prompt
 
   return {
     url: oidc.buildAuthorizationUrl(config, params).href,
     state: { state, nonce, codeVerifier, returnTo },
   }
+}
+
+export async function beginLogin(returnTo: string, env: Env = process.env): Promise<{ url: string; state: LoginState }> {
+  return beginLoginWith(oidcSettingsFromEnv(env), returnTo, env)
 }
 
 function asString(v: unknown): string | undefined {
@@ -103,12 +160,15 @@ function asStringList(v: unknown): string[] {
 
 const looksLikeEmail = (v: string | undefined): v is string => Boolean(v && /^[^@\s]+@[^@\s]+$/.test(v))
 
-export async function completeLogin(
+// The code exchange: validated ID token claims (plus UserInfo where the ID
+// token lacks the address or groups). Throws on any protocol error.
+export async function exchangeCode(
+  settings: OidcSettings,
   callbackUrl: URL,
   login: LoginState,
   env: Env = process.env
-): Promise<Identity> {
-  const config = await getConfiguration(env)
+): Promise<Record<string, unknown>> {
+  const config = await getConfiguration(settings)
 
   // The provider redirects to APP_URL/auth/callback; rebuild the URL from
   // configuration rather than trusting the Host header we were reached on.
@@ -125,20 +185,29 @@ export async function completeLogin(
   const sub = asString(claims.sub)
   if (!sub) throw new LoginError('failed', 'ID token has no subject')
 
-  const emailClaim = env.OIDC_EMAIL_CLAIM?.trim() || 'email'
-  const groupsClaim = env.OIDC_GROUPS_CLAIM?.trim() || 'groups'
-
   // Some providers only return email / groups from the UserInfo endpoint.
-  if ((!asString(claims[emailClaim]) || claims[groupsClaim] == null) && config.serverMetadata().userinfo_endpoint) {
+  // Required claims never come from there: they must be in the signed ID
+  // token, which is what ties the sign-in to the organization.
+  const required = new Set(parseRequiredClaims(settings.requiredClaims).map((r) => r.claim))
+  if ((!asString(claims[settings.emailClaim]) || claims[settings.groupsClaim] == null) && config.serverMetadata().userinfo_endpoint) {
     try {
       const info = await oidc.fetchUserInfo(config, tokens.access_token, sub)
-      for (const [k, v] of Object.entries(info)) if (claims[k] == null) claims[k] = v
+      for (const [k, v] of Object.entries(info)) if (claims[k] == null && !required.has(k)) claims[k] = v
     } catch {
       // UserInfo is optional; fall through with what the ID token gave us.
     }
   }
+  return claims
+}
 
-  return identityFromClaims(claims, env)
+export async function completeLogin(
+  callbackUrl: URL,
+  login: LoginState,
+  env: Env = process.env,
+  extraGroups: readonly string[] = []
+): Promise<Identity> {
+  const settings = oidcSettingsFromEnv(env)
+  return identityFromClaimsWith(settings, await exchangeCode(settings, callbackUrl, login, env), env, extraGroups)
 }
 
 // OIDC_REQUIRED_CLAIMS="hd=example.com,tid=1111|2222": every listed claim must
@@ -165,47 +234,56 @@ function claimMatches(actual: unknown, allowed: string[]): boolean {
 }
 
 // Turns validated token claims into an identity, or refuses the sign-in.
-export function identityFromClaims(claims: Record<string, unknown>, env: Env = process.env): Identity {
+export function identityFromClaimsWith(
+  settings: OidcSettings,
+  claims: Record<string, unknown>,
+  env: Env = process.env,
+  extraGroups: readonly string[] = []
+): Identity {
   const sub = asString(claims.sub)
   if (!sub) throw new LoginError('failed', 'ID token has no subject')
 
-  for (const { claim, values } of parseRequiredClaims(env.OIDC_REQUIRED_CLAIMS)) {
+  for (const { claim, values } of parseRequiredClaims(settings.requiredClaims)) {
     if (!claimMatches(claims[claim], values)) {
       throw new LoginError('wrong_account', `Required claim "${claim}" is missing or has a value that is not allowed`)
     }
   }
 
   // The address comes from exactly one claim. To use a provider's sign-in
-  // name instead (Entra ID often issues no `email`), set OIDC_EMAIL_CLAIM
-  // explicitly, e.g. to preferred_username.
-  const emailClaim = env.OIDC_EMAIL_CLAIM?.trim() || 'email'
-  const email = asString(claims[emailClaim])
+  // name instead (Entra ID often issues no `email`), name that claim
+  // explicitly, e.g. preferred_username.
+  const email = asString(claims[settings.emailClaim])
   if (!looksLikeEmail(email)) {
-    throw new LoginError('no_email', `The identity provider did not return an email address in the "${emailClaim}" claim`)
+    throw new LoginError('no_email', `The identity provider did not return an email address in the "${settings.emailClaim}" claim`)
   }
   // `email_verified` describes the standard `email` claim only. Anything
   // other than an explicit true counts as unverified.
-  if (emailClaim === 'email' && claims.email_verified !== true && !envBool(env.OIDC_ALLOW_UNVERIFIED_EMAIL)) {
+  if (settings.emailClaim === 'email' && claims.email_verified !== true && !settings.allowUnverifiedEmail) {
     throw new LoginError('unverified_email', 'The identity provider did not confirm this email address as verified')
   }
 
-  const groupsClaim = env.OIDC_GROUPS_CLAIM?.trim() || 'groups'
   return {
     sub,
     email: email.toLowerCase(),
     name: asString(claims.name),
-    groups: relevantGroups(asStringList(claims[groupsClaim]), env),
+    groups: relevantGroups(asStringList(claims[settings.groupsClaim]), env, extraGroups),
   }
 }
 
-// RP-initiated logout URL, when enabled and the provider supports it.
+export function identityFromClaims(claims: Record<string, unknown>, env: Env = process.env, extraGroups: readonly string[] = []): Identity {
+  return identityFromClaimsWith(oidcSettingsFromEnv({ OIDC_ISSUER: 'https://unused.invalid', OIDC_CLIENT_ID: 'unused', ...env }), claims, env, extraGroups)
+}
+
+// RP-initiated logout URL, when enabled and the provider supports it
+// (environment-configured connections only).
 export async function endSessionUrl(env: Env = process.env): Promise<string | null> {
   if (!envBool(env.OIDC_LOGOUT_AT_IDP)) return null
   try {
-    const config = await getConfiguration(env)
+    const settings = oidcSettingsFromEnv(env)
+    const config = await getConfiguration(settings)
     if (!config.serverMetadata().end_session_endpoint) return null
     return oidc.buildEndSessionUrl(config, {
-      client_id: env.OIDC_CLIENT_ID!.trim(),
+      client_id: settings.clientId,
       post_logout_redirect_uri: `${appUrl(env)}/login?signed_out=1`,
     }).href
   } catch {
