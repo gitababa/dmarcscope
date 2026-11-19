@@ -10,7 +10,8 @@ It is read-only: it never sends, blocks or changes any mail.
 
 - **Overview** — volume, DMARC / DKIM / SPF alignment and published policy for every domain.
 - **Per-domain pages** — alignment breakdown, every sending source, live DNS health checks
-  (MX, SPF, DMARC, DKIM) and advice on when it is safe to move to `quarantine` or `reject`.
+  (MX, SPF, DMARC with the parent-domain fallback for subdomains, DKIM, MTA-STS, TLS-RPT, BIMI)
+  and advice on when it is safe to move to `quarantine` or `reject`.
 - **Issues** — each source that fails DMARC, with a diagnosis: forwarded mail, a service that was
   never set up for your domain, a Return-Path mismatch, or spoofing — and whether the sending IP
   is covered by your SPF record, and through which `include`.

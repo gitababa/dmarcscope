@@ -12,7 +12,7 @@ from typing import Callable
 import psycopg
 
 from . import enrich, mailbox, store
-from .config import Settings
+from .config import Settings, parse_dns_servers
 from .parsing import InvalidDMARCReport, ParserError, parse_email, parse_file
 
 log = logging.getLogger("ingestor")
@@ -87,6 +87,7 @@ def _store_parsed(conn, parsed: dict, settings: Settings, stats: dict) -> None:
 
 
 RETENTION_KEY = "ingest.retention_days"
+DNS_SERVERS_KEY = "dns.servers"
 
 
 def with_panel_settings(conn, settings: Settings) -> Settings:
@@ -107,6 +108,14 @@ def with_panel_settings(conn, settings: Settings) -> Settings:
                 settings = replace(settings, retention_days=raw)
             else:
                 log.error("setting %s saved in the panel is invalid; no reports are purged until it is fixed", RETENTION_KEY)
+    # Resolvers for reverse DNS: DNS_SERVERS wins, then the panel's dns.servers.
+    if not settings.dns_servers and not (os.environ.get("DNS_SERVERS") or "").strip():
+        raw = store.db_setting(conn, DNS_SERVERS_KEY)
+        if raw is not None:
+            try:
+                settings = replace(settings, dns_servers=parse_dns_servers(str(raw)))
+            except ValueError:
+                log.error("setting %s saved in the panel is invalid; reverse DNS uses the system resolver", DNS_SERVERS_KEY)
     return settings
 
 
@@ -178,7 +187,7 @@ def run_ingest(
 
             try:
                 if housekeeping:
-                    stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds)
+                    stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds, servers=settings.dns_servers)
             except Exception as e:  # noqa: BLE001 - enrichment is best-effort
                 log.exception("reverse-DNS enrichment failed")
                 stats["errors"].append({"error": f"enrichment: {type(e).__name__}: {e}"})
@@ -257,7 +266,8 @@ def run_enrich(settings: Settings) -> dict:
     stats = _new_stats()
     conn = store.connect(settings)
     try:
-        stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds or 60)
+        settings = with_panel_settings(conn, settings)
+        stats["enriched"] = enrich.enrich_ip_metadata(conn, settings.enrich_budget_seconds or 60, servers=settings.dns_servers)
     finally:
         conn.close()
     return stats

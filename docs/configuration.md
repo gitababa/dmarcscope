@@ -35,6 +35,7 @@ is fixed the setting uses its default, or, for a secret, counts as not set.
 | SMTP server, port, encryption, user name, password (secret), sender address (alerts) | `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_SECURITY` (`starttls` or `ssl`), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | — (email channels cannot send) | owner |
 | Allow alerts to private addresses | `ALERTS_ALLOW_PRIVATE_WEBHOOKS` | off | owner |
 | Domains a viewer sees without a scope | `ACCESS_DOMAIN_DEFAULT` (`all` or `none`) | `all` | owner |
+| DNS servers (DNS checks, SPF expansion, the worker's reverse DNS) | `DNS_SERVERS`, e.g. `1.1.1.1, 8.8.8.8` (up to 4 IP addresses, optional `:port`) | — (the host's own resolver) | owner |
 
 The single sign-on connection itself is configured under **Sign-in** ([sso.md](sso.md)).
 Reports mailboxes and monitored domains are configured under **Mailboxes** and **Monitored

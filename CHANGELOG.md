@@ -8,6 +8,23 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Added — DNS checks
+
+- **MTA-STS, TLS-RPT and BIMI** on the domain page. MTA-STS fetches the policy file (HTTPS, no
+  redirects, verified certificate, private addresses refused) and checks that its `mx:` patterns
+  cover every MX host. Not publishing one of these shows as "Not published", not as a failure.
+- **DNS servers setting** (`DNS_SERVERS`, or Admin → Settings → DNS, owner only): up to four
+  resolvers, optional `:port`, used by DNS checks, SPF expansion and the worker's reverse DNS.
+  Unset, the host's own resolver is used as before. Each check records which servers answered.
+
+### Fixed — DNS checks
+
+- A subdomain without its own `_dmarc` record now gets the policy of the closest parent domain
+  (with `sp=` in force) instead of "No DMARC record".
+- A DKIM selector whose lookup timed out or failed is shown as unknown, not as a missing key.
+- Every query has its own timeout and a retry, instead of failing on one dropped packet.
+- `v=spf10` or `v=DMARC10` no longer count as SPF or DMARC records.
+
 ### Changed — setup and documentation
 
 - `.env.example` leaves `AUTH_PROVIDER` unset (sign-in managed in the app), the default for a

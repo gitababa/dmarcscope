@@ -6,7 +6,7 @@
 // matchIpInNetworks() then answers "is this sending IP authorized, and via
 // which include?" — which turns a DMARC failure into a diagnosis.
 
-import { resolveTxt, resolveMx, resolve4, resolve6 } from 'node:dns/promises'
+import { createDnsClient, isNoRecord, type DnsClient } from './dns-resolver'
 
 export type SpfNetwork = {
   cidr: string
@@ -27,19 +27,15 @@ export type SpfExpansion = {
 }
 
 // The DNS calls expandSpf makes; replaceable in tests.
-export type SpfResolver = {
-  resolveTxt(name: string): Promise<string[][]>
-  resolveMx(name: string): Promise<Array<{ exchange: string; priority: number }>>
-  resolve4(name: string): Promise<string[]>
-  resolve6(name: string): Promise<string[]>
-}
+export type SpfResolver = DnsClient
 
 const MAX_LOOKUPS = 10
-const TIMEOUT_MS = 4000
+const TIMEOUT_MS = 12_000
 // The record being walked is untrusted (anyone can publish an include tree),
 // so the whole expansion is bounded, not just each query.
 const TOTAL_BUDGET_MS = 20_000
 
+// Hard cap per query on top of the resolver's own timeout and retries.
 function withTimeout<T>(p: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
@@ -50,11 +46,10 @@ function withTimeout<T>(p: Promise<T>): Promise<T> {
   ]).finally(() => clearTimeout(timer))
 }
 
-// "The name exists but has no such record" and "the name does not exist" are
-// answers. Everything else (timeout, SERVFAIL, refused) is a failed lookup.
-function isNoRecord(e: unknown): boolean {
-  const code = (e as NodeJS.ErrnoException | null)?.code
-  return code === 'ENOTFOUND' || code === 'ENODATA'
+// RFC 7208 §4.5: the record starts with exactly "v=spf1", followed by a
+// space or nothing ("v=spf10" is some other record).
+export function isSpfRecord(txt: string): boolean {
+  return /^v=spf1(\s|$)/i.test(txt)
 }
 
 // [addr, prefix] for a syntactically valid CIDR, else null.
@@ -72,7 +67,7 @@ export async function expandSpf(
   domain: string,
   opts: { resolver?: SpfResolver; budgetMs?: number } = {}
 ): Promise<SpfExpansion> {
-  const dns: SpfResolver = opts.resolver ?? { resolveTxt, resolveMx, resolve4, resolve6 }
+  const dns: SpfResolver = opts.resolver ?? createDnsClient()
   const deadline = Date.now() + (opts.budgetMs ?? TOTAL_BUDGET_MS)
   const result: SpfExpansion = {
     expanded_at: new Date().toISOString(),
@@ -136,7 +131,7 @@ export async function expandSpf(
 
     const txts = await txt(target)
     if (txts === null) return // unknown, not "no SPF record"
-    const spf = txts.find((t) => t.toLowerCase().startsWith('v=spf1'))
+    const spf = txts.find(isSpfRecord)
     if (!spf) {
       if (via.length === 0) return
       result.notes.push(`${target} (referenced via ${via.join(' > ')}) has no SPF record.`)
