@@ -1,6 +1,10 @@
 # Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Security problems go through [SECURITY.md](SECURITY.md),
+not public issues.
+
+`main` is protected: changes land through pull requests once CI passes.
 
 ## Getting set up
 

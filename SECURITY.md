@@ -1,5 +1,10 @@
 # Security
 
+## Supported versions
+
+Security fixes go into the latest release (currently 2.0.x). Please upgrade before reporting
+a problem in an older version.
+
 ## Reporting a vulnerability
 
 Please report security issues privately through GitHub's **Report a vulnerability** button

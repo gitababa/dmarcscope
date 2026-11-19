@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in DMARCscope does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a security problem? Do not open an issue: report it privately as described in
+        [SECURITY.md](https://github.com/gitababa/dmarcscope/blob/main/SECURITY.md).
+
+        Please remove domain names, IP addresses, email addresses and secrets you do not want
+        to publish from anything you paste below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The DMARCscope version or commit (shown in the panel and in `package.json`).
+      placeholder: 2.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How you run it
+      options:
+        - Docker Compose
+        - Kubernetes / other containers
+        - Vercel
+        - From source (npm / Python)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: auth
+    attributes:
+      label: Sign-in mode
+      options:
+        - Managed in the app (setup wizard)
+        - oidc
+        - proxy-jwt
+        - proxy-header
+        - none
+        - Not relevant
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output from the web app or the ingest worker. Redact secrets.
+      render: text
