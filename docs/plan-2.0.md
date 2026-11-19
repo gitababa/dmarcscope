@@ -805,6 +805,136 @@ authorization function from milestone 1, with a test that every query path is fi
 SCIM 2.0 provisioning (users and groups; deactivation is immediate). API tokens with
 scopes and expiry, a read-only JSON API, CSV export.
 
+### Decisions made while designing (change them here if the owner disagrees)
+
+1. **Only viewers can be limited to domains.** Admins manage mail, domains, alerts and
+   people for the whole deployment; a "domain-limited admin" could not do any of that
+   without seeing everything. `owner` and `admin` always get every domain. Making a
+   limited viewer an admin lifts the limit, and the screen says so before it happens.
+2. **Today's behaviour is the default.** A viewer with no scope configured sees every
+   domain, as now, so upgrading changes nothing. Limiting is something an administrator
+   does on purpose, per person or per group.
+3. **Missing information is never read as "everything".** The failure that matters: an
+   identity provider that stops sending the group claim must not widen anyone's access.
+   Therefore a deployment-wide setting `access.domain_default` (`all` | `none`, default
+   `all`) decides what a viewer with *no* scope row and no matching group gets; with
+   `none`, a viewer sees no domain until granted one. The Groups screen recommends `none`
+   once any group is limited, and says why. A limited principal with zero grants sees
+   nothing (an empty list is not "all").
+4. **SCIM cannot grant roles.** SCIM-provisioned users are `viewer`. `admin` comes from the
+   panel or from an access rule on a group, as today; `owner` is never reachable from SCIM
+   and SCIM requests that touch an owner are refused.
+5. **API tokens are read-only and never wider than their creator.** A token's scope is its
+   own; its creator must still be an active administrator or owner when it is used, so a
+   disabled, removed or demoted creator makes the token fail at once (built this way because a
+   demoted viewer's scope can depend on group claims that exist only in their browser session).
+6. **No new dependency.** Token hashing, SCIM filters and CSV are written on `node:crypto`
+   and the code already in the repository.
+
+### Data model (migration `0008`)
+
+- `domain_scopes` — `id`, `kind` (`user` | `group`), `principal` (the user id as text, or
+  the lower-cased group name), `mode` (`all` | `limited`), `updated_at`, `updated_by`;
+  unique on (`kind`, `principal`). No row means "no opinion" (see resolution below).
+- `domain_grants` — `id`, `scope_id` → `domain_scopes` (cascade), `domain` (normalized
+  name, not a foreign key: a grant may precede the domain's first report), unique on
+  (`scope_id`, `domain`).
+- `groups` — `id`, `display_name` (unique, lower-case compare), `external_id`, `source`
+  (`scim` | `local`), `created_at`; `group_members` — (`group_id`, `user_id`) primary key,
+  both cascade. A SCIM group named *X* counts as membership of group *X* for **domain scopes
+  only**, in addition to the groups in the identity provider's claim. It never feeds access
+  rules: a group named like an administrators group must not grant a role.
+- `api_tokens` — `id`, `kind` (`api` | `scim`), `name`, `prefix` (first 8 characters, for
+  display), `token_hash` (SHA-256 of the whole token, unique), `scopes` (`text[]`),
+  `domain_mode` and `domains` (the token's own limit; `limited` with none sees nothing),
+  `created_by` (user id), `created_at`, `expires_at` (required), `last_used_at`,
+  `revoked_at`.
+- `users`: add `external_id TEXT` (SCIM `externalId`), unique where not null.
+- Settings: `access.domain_default`.
+
+**Resolution** (`lib/auth/access.ts`, the only place that decides): role `owner` or `admin`
+→ all domains. Otherwise gather the person's own `domain_scopes` row and the rows of every
+group they belong to (claim groups ∪ SCIM groups). The person's own row wins: `all` → all,
+`limited` → their grants ∪ the grants of their `limited` groups. With no own row: any group
+row `all` → all; otherwise the union of `limited` groups' grants; no rows at all →
+`access.domain_default`. The result is a `DomainScope`: `{kind: 'all'}` or
+`{kind: 'domains', names: [...]}` (possibly empty). It is read per request behind the same
+per-process cache keyed on `config_version` that settings use; every write bumps it, so a
+change applies on every replica within the cache window, and removal of access takes the
+same path as disabling a user.
+
+### Screens
+
+- **Users → one user**: "Domain access" — everyone / only these domains (list with add and
+  remove), plus the groups they belong to and what those add. Refusal text for admins and
+  owners ("always all domains").
+- **Admin → Groups** (new): every known group (SCIM, access rules, scopes) with its mode
+  and domains; the `access.domain_default` switch with the explanation above.
+- **Admin → API access** (new): API tokens (name, scopes, domains, expiry, last used,
+  revoke; the token is shown once on creation) and the SCIM token with the endpoint URL.
+- **Domain page, Overview, Issues**: unchanged for people who see everything; for limited
+  people they list only their domains, and a domain they lack answers 404 (no existence
+  leak). An Export CSV button on the domain and issues pages.
+
+### API (`/api/v1`, bearer token only: no cookies, no CORS, no token in a URL)
+
+`GET /api/v1/domains`, `/domains/{domain}/summary`, `/domains/{domain}/sources`,
+`/domains/{domain}/timeseries`, `/problems`, `/domains/{domain}/dns`, each with `?days=`
+(1–90) and `?format=csv` for the list endpoints. Scopes: `domains:read` (list, summary, timeseries),
+`reports:read` (sources, problems), `dns:read`. Every handler gets its `DomainScope` from
+`authorize`-for-tokens and passes it to `lib/queries.ts`; there is no second code path to
+the data. Errors are JSON with a stable `code`; an unknown, expired, revoked or
+creator-less token is one indistinguishable 401. CSV cells are neutralized against
+spreadsheet formulas the way the audit export does it.
+
+### SCIM 2.0 (`/scim/v2`, bearer = the `scim` token)
+
+`ServiceProviderConfig`, `ResourceTypes`, `Schemas`; `Users` and `Groups` with list (`filter`
+only `userName eq`, `externalId eq`, `displayName eq`; anything else is `400 invalidFilter`;
+`count` ≤ 100), get, create, replace, patch (`add`/`replace`/`remove`, including `active` and
+group `members`), delete. `userName` is the lower-cased e-mail. `active:false` and DELETE
+both set `status = disabled` and `sessions_valid_after = NOW()`, so the person's next request
+fails; re-activation sets `active` again. The existing guard rails apply (never the last
+active owner, never an owner at all). Bodies are capped at 256 KB, member lists at 1000.
+Every change is audited as `scim:<token name>`. Responses use `application/scim+json`
+and SCIM error bodies.
+
+### Failure cases to build and test
+
+- Scope: viewer limited to a domain with another domain's data present: every export of
+  `lib/queries.ts` returns nothing of the other domain (a test lists the module's exports and
+  fails when one has no case, so a new query cannot skip the check); limited with zero
+  grants sees nothing; `domain_default = none` and no row sees nothing; the IdP sends no
+  groups; a viewer promoted to admin; a grant for a domain that does not exist yet; two
+  groups, one `all`; own row beats group rows; a removed grant applies on the next request;
+  a limited user opens another domain's page, CSV and API path → 404.
+- Tokens: expired, revoked, unknown, malformed, wrong scope, creator disabled or demoted,
+  token wider than its creator at creation (refused) and at use (clipped), token in a
+  query string (ignored), token reuse after revocation; only admins create tokens; secret
+  shown once and never stored.
+- SCIM: wrong or missing token, the `api` token used on `/scim` and the reverse (both 401),
+  create an existing e-mail, PATCH to an owner (refused), deactivate then the user's open
+  session fails on its next request, group membership change changes their scope, oversized
+  body, unsupported filter, SCIM user then signing in through OIDC.
+- Upgrade: a 2.0 milestone 5 database gets `0008`; every viewer still sees every domain.
+
+### Done when
+
+- [ ] A viewer can be limited to chosen domains, directly or through a group, and sees
+      exactly those everywhere (overview, issues, domain pages, CSV, API); the every-query
+      test passes and fails when a query ignores its scope.
+- [ ] `access.domain_default` and the "no groups sent" case are tested and explained on
+      the Groups screen.
+- [ ] SCIM users and groups can be provisioned, patched and deprovisioned from a test
+      client; deactivation takes effect on the person's next request.
+- [ ] API tokens: created once, scoped, expiring, revocable, never wider than the creator;
+      the JSON API and CSV export return only what the token's scope allows.
+- [ ] Every refusal above has a test; every new screen was opened in a browser, error states
+      and phone width included; docs, `.env.example` (nothing new is required), CHANGELOG and
+      the upgrade note are written and the upgrade was run; security review done.
+- [ ] Real identity providers' SCIM clients (Okta, Entra ID) were not available: the
+      pull request labels that as unverified.
+
 ## Milestone 7 — SAML (only if requested)
 
 Service-provider-initiated SAML 2.0 using a maintained, widely used library chosen after

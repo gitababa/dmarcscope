@@ -7,7 +7,7 @@
 // says whether they may come in and with which role.
 
 import { ConfigError, envBool, type Env } from '../config'
-import { ruleGroups } from './authz'
+import { trackedGroups } from './authz'
 import { type Directory, defaultDirectory } from './directory'
 import { identityFromProxyHeader, identityFromProxyJwt } from './proxy-providers'
 import { resolveAccess } from './resolve'
@@ -69,7 +69,7 @@ export async function authenticate(req: RequestLike, env: Env = process.env, dir
     return resolveAccess(claims.identity, provider, { issuedAt: claims.issuedAt, userId: claims.userId }, env, dir)
   }
 
-  const extraGroups = ruleGroups((await dir.config()).rules)
+  const extraGroups = trackedGroups(await dir.config())
   const identity =
     provider === 'proxy-jwt' ? await identityFromProxyJwt(req.headers, env, extraGroups) : identityFromProxyHeader(req.headers, env, extraGroups)
   if (!identity) return { status: 'unauthenticated' }

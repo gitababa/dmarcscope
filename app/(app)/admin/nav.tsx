@@ -8,6 +8,8 @@ const LINKS = [
   { href: '/admin/mail', label: 'Mail' },
   { href: '/admin/domains', label: 'Domains' },
   { href: '/admin/alerts', label: 'Alerts' },
+  { href: '/admin/groups', label: 'Groups' },
+  { href: '/admin/api', label: 'API access' },
   { href: '/admin/audit', label: 'Audit log' },
 ]
 

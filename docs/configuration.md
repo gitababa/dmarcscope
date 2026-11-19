@@ -34,10 +34,11 @@ is fixed the setting uses its default, or, for a secret, counts as not set.
 | Machine endpoint token (secret) | `CRON_SECRET` | — (endpoints closed) | owner |
 | SMTP server, port, encryption, user name, password (secret), sender address (alerts) | `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_SECURITY` (`starttls` or `ssl`), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | — (email channels cannot send) | owner |
 | Allow alerts to private addresses | `ALERTS_ALLOW_PRIVATE_WEBHOOKS` | off | owner |
+| Domains a viewer sees without a scope | `ACCESS_DOMAIN_DEFAULT` (`all` or `none`) | `all` | owner |
 
 The single sign-on connection itself is configured under **Admin → Sign-in** ([sso.md](sso.md)).
 Reports mailboxes and monitored domains are configured under **Admin → Mail** and **Admin →
-Domains** ([mail.md](mail.md)). Alert rules and channels are under **Admin → Alerts** ([alerts.md](alerts.md)).
+Domains** ([mail.md](mail.md)). Alert rules and channels are under **Admin → Alerts** ([alerts.md](alerts.md)). Domain limits, SCIM and API tokens are under **Admin → Users / Groups / API access** ([enterprise.md](enterprise.md)).
 
 ### Secrets in the database
 

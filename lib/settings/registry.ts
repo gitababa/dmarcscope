@@ -250,6 +250,18 @@ const SETTINGS: SettingDef[] = [
     },
   },
   {
+    key: 'access.domain_default',
+    label: 'Domains a viewer sees without a scope',
+    description:
+      '"all" (the default): a viewer nobody has limited sees every domain. "none": such a viewer sees no domain until one is granted. Choose "none" once groups are limited, so an identity provider that stops sending groups cannot widen anyone\'s access. Administrators and owners always see every domain.',
+    type: 'string',
+    env: 'ACCESS_DOMAIN_DEFAULT',
+    default: 'all',
+    ownerOnly: true,
+    parse: oneOf(['all', 'none']),
+    parseEnv: oneOf(['all', 'none']),
+  },
+  {
     key: 'alerts.allow_private_webhooks',
     label: 'Allow alerts to private addresses',
     description:
@@ -280,6 +292,7 @@ export type SettingKey =
   | 'smtp.password'
   | 'smtp.from'
   | 'alerts.allow_private_webhooks'
+  | 'access.domain_default'
 export type SecretSettingKey = 'cron.secret' | 'smtp.password'
 export type PlainSettingKey = Exclude<SettingKey, SecretSettingKey>
 

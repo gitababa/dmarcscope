@@ -39,6 +39,9 @@ export type Snapshot = {
   version: number
   rows: ReadonlyMap<string, { value: unknown; isSecret: boolean }>
   rules: readonly AccessRule[]
+  // Group names domain scopes are keyed on (lower-case). Kept in the session
+  // along with the groups access rules mention.
+  scopeGroups: readonly string[]
   ownerExists: boolean
   sso: SsoConnectionRow | null
 }
@@ -116,6 +119,7 @@ export class ConfigStore {
       version: string
       settings: Array<{ key: string; value: unknown; is_secret: boolean }>
       rules: AccessRule[]
+      scope_groups: string[]
       owner_exists: boolean
       sso: (Omit<SsoConnectionRow, 'id'> & { id: string | number }) | null
     }>(`
@@ -123,6 +127,7 @@ export class ConfigStore {
         (SELECT version FROM config_version) AS version,
         (SELECT COALESCE(json_agg(json_build_object('key', key, 'value', value, 'is_secret', is_secret)), '[]'::json) FROM settings) AS settings,
         (SELECT COALESCE(json_agg(json_build_object('kind', kind, 'value', value, 'role', role) ORDER BY id), '[]'::json) FROM access_rules) AS rules,
+        (SELECT COALESCE(array_agg(DISTINCT principal), '{}') FROM domain_scopes WHERE kind = 'group') AS scope_groups,
         EXISTS (SELECT 1 FROM users WHERE role = 'owner') AS owner_exists,
         (SELECT row_to_json(c) FROM (
            SELECT id, preset, issuer, client_id, client_secret, scopes, email_claim, groups_claim,
@@ -134,6 +139,7 @@ export class ConfigStore {
       version: Number(r.version ?? 0),
       rows: new Map(r.settings.map((s) => [s.key, { value: s.value, isSecret: s.is_secret }])),
       rules: r.rules,
+      scopeGroups: r.scope_groups ?? [],
       ownerExists: r.owner_exists,
       sso: r.sso ? { ...r.sso, id: Number(r.sso.id) } : null,
     }

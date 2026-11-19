@@ -3,13 +3,17 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { FocusedSubmitButton, SubmitButton } from '@/components/client'
 import { Pill } from '@/components/ui'
+import { getUserScope, listUserGroups } from '@/lib/access-admin'
 import { getUser } from '@/lib/admin'
 import { atLeast } from '@/lib/auth/roles'
 import { requirePageRole } from '@/lib/auth/server'
 import type { Role } from '@/lib/auth/types'
+import { getPool } from '@/lib/db'
 import { fmtDate, relTime } from '@/lib/format'
+import { clearUserScopeAction, setUserScopeAction } from '../../access-actions'
 import { AdminNav } from '../../nav'
 import { changeRoleAction, disableAction, enableAction, removeAction, signOutEverywhereAction } from '../../people-actions'
+import { ScopeFields } from '../../scope-fields'
 import { Notices, RoleSelect } from '../../shared'
 
 export const dynamic = 'force-dynamic'
@@ -27,6 +31,7 @@ export default async function AdminUserPage({
   const user = await getUser(access, Number(rawId))
   if (!user) notFound()
 
+  const [scope, groups] = await Promise.all([getUserScope(getPool(), user.id), listUserGroups(getPool(), user.id)])
   const self = access.session.userId === user.id
   // Only the actions the caller may take are shown; the server checks again.
   const mayChange = atLeast(access.role, user.role as Role)
@@ -98,6 +103,54 @@ export default async function AdminUserPage({
           <dd>{fmtDate(user.created_at)}</dd>
         </dl>
       </div>
+
+      <section className="section" aria-labelledby="scope-head">
+        <div className="section-head">
+          <h2 id="scope-head">Domain access</h2>
+        </div>
+        {user.role !== 'viewer' ? (
+          <div className="card">
+            <p className="small" style={{ margin: 0 }}>
+              {user.role === 'owner' ? 'Owners' : 'Administrators'} always see every domain. A domain limit only applies to viewers. If you make a limited viewer an
+              administrator, the limit stops applying.
+            </p>
+          </div>
+        ) : (
+          <div className="card">
+            <p className="small" style={{ marginTop: 0 }}>
+              {scope
+                ? scope.mode === 'all'
+                  ? 'This person is set to see every domain.'
+                  : `This person is limited to ${scope.domains.length} domain(s)${scope.domains.length === 0 ? ', so they see nothing' : ''}.`
+                : 'No limit is set for this person. Their groups and the default decide.'}
+              {groups.length > 0 && (
+                <>
+                  {' '}
+                  Groups (SCIM):{' '}
+                  {groups.map((g) => `${g.name}${g.scope ? ` (${g.scope.mode === 'all' ? 'every domain' : `${g.scope.domains.length} domain(s)`})` : ''}`).join(', ')}.
+                </>
+              )}
+            </p>
+            <form action={setUserScopeAction} className="form">
+              <input type="hidden" name="id" value={user.id} />
+              <ScopeFields id="u" mode={scope?.mode ?? 'limited'} domains={scope?.domains ?? []} />
+              <div className="inline-form">
+                <SubmitButton className="btn btn-primary btn-sm" pendingLabel="Saving…">
+                  Save domain access
+                </SubmitButton>
+              </div>
+            </form>
+            {scope && (
+              <form action={clearUserScopeAction} className="inline-form" style={{ marginTop: '0.8rem' }}>
+                <input type="hidden" name="id" value={user.id} />
+                <SubmitButton className="btn btn-sm" pendingLabel="…">
+                  Remove this person’s own setting
+                </SubmitButton>
+              </form>
+            )}
+          </div>
+        )}
+      </section>
 
       {!mayChange && (
         <div className="notice" role="note">

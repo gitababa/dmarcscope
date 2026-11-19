@@ -19,6 +19,9 @@ import { authProvider, authenticate, hasSignInPage } from '@/lib/auth'
 //   /api/healthz, /api/readyz  orchestrator probes (no data)
 //   /api/cron/*                machine endpoints; each verifies the
 //                              CRON_SECRET bearer token itself
+//   /api/v1/*, /scim/v2/*      the JSON API and SCIM: each verifies its own
+//                              bearer token (lib/api-tokens.ts); cookies are
+//                              never read there
 function isPublicPath(path: string): boolean {
   return (
     path === '/login' ||
@@ -28,7 +31,9 @@ function isPublicPath(path: string): boolean {
     path.startsWith('/setup/') ||
     path === '/api/healthz' ||
     path === '/api/readyz' ||
-    path.startsWith('/api/cron/')
+    path.startsWith('/api/cron/') ||
+    path.startsWith('/api/v1/') ||
+    path.startsWith('/scim/v2/')
   )
 }
 

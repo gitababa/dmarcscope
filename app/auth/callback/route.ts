@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { appUrl } from '@/lib/config'
 import { authenticate } from '@/lib/auth'
 import { recordAudit } from '@/lib/audit'
-import { ruleGroups } from '@/lib/auth/authz'
+import { trackedGroups } from '@/lib/auth/authz'
 import { currentOidcSettings } from '@/lib/auth/connection'
 import { defaultDirectory } from '@/lib/auth/directory'
 import { LoginError, exchangeCode, identityFromClaimsWith } from '@/lib/auth/oidc'
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
     const dir = defaultDirectory()
     const claims = await exchangeCode(connection.settings, req.nextUrl, login)
-    const identity = identityFromClaimsWith(connection.settings, claims, process.env, ruleGroups((await dir.config()).rules))
+    const identity = identityFromClaimsWith(connection.settings, claims, process.env, trackedGroups(await dir.config()))
     // Finds or records the person (a first sign-in nobody admits becomes a
     // pending request an administrator can approve).
     const access = await resolveAccess(identity, 'oidc', {}, process.env, dir)

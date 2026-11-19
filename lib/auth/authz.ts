@@ -71,6 +71,12 @@ export function ruleGroups(rules: readonly AccessRule[]): string[] {
   return rules.filter((r) => r.kind === 'group').map((r) => r.value)
 }
 
+// The groups worth keeping from a sign-in: those an access rule mentions and
+// those a domain scope is keyed on.
+export function trackedGroups(cfg: { rules: readonly AccessRule[]; scopeGroups?: readonly string[] }): string[] {
+  return [...new Set([...ruleGroups(cfg.rules), ...(cfg.scopeGroups ?? [])])]
+}
+
 // Identity providers can return hundreds of groups; only the ones some rule
 // mentions are worth keeping in the session cookie. `extra` are the groups
 // named by database rules.

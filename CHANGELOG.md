@@ -106,6 +106,26 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
 - Upgrading from the previous 2.0 milestone: run the migrations (`0007`). With no rules nothing
   changes and nothing is sent.
 
+### Added — milestone 6, enterprise access
+
+- **Per-domain permissions:** limit a viewer, directly or through a group, to chosen domains
+  (Admin → Users, Admin → Groups). Every query in `lib/queries.ts` filters by the caller's scope, a
+  test fails if one does not, and a domain outside the scope answers "not found". Administrators and
+  owners always see everything. A limited setting with no domains sees nothing, and the new setting
+  `access.domain_default` (`ACCESS_DOMAIN_DEFAULT`, `all` by default, `none` recommended once groups
+  are limited) decides what a viewer with no scope sees, so a missing group claim cannot widen
+  anyone's access. See [docs/enterprise.md](docs/enterprise.md).
+- **SCIM 2.0** (`/scim/v2`): users and groups, behind a token only an owner creates. Provisioned
+  people are viewers; SCIM cannot set roles, rename an e-mail address or touch an owner;
+  deactivating (`active:false` or `DELETE`) takes effect on the person's next request. SCIM groups
+  count for domain scopes only, never for access rules.
+- **API tokens and a read-only JSON API** (`/api/v1`): scopes (`domains:read`, `reports:read`,
+  `dns:read`), required expiry, domain limits, revocation, never wider than the creator; only the
+  token's SHA-256 is stored and the token is shown once. `format=csv` and CSV downloads on the domain
+  and Issues pages, with spreadsheet formulas neutralized.
+- Migration `0008` (`domain_scopes`, `domain_grants`, `groups`, `group_members`, `api_tokens`,
+  `users.external_id`). Upgrading changes nothing for anyone until an administrator uses a feature.
+
 ### Security
 
 - Required claims (`OIDC_REQUIRED_CLAIMS`, and those of a panel connection) must be in the signed ID
