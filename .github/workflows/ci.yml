@@ -145,7 +145,7 @@ jobs:
       - name: Quick start
         run: |
           cp .env.example .env
-          echo 'AUTH_ALLOW_INSECURE_NONE=true' >> .env
+          printf 'AUTH_PROVIDER=none\nAUTH_ALLOW_INSECURE_NONE=true\n' >> .env
           python3 scripts/demo_reports.py demo-reports
           docker compose up -d --build
           docker compose run --rm ingest import /reports

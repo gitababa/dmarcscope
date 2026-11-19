@@ -13,7 +13,7 @@ export const GET = (req: NextRequest) =>
       changePassword: { supported: false },
       sort: { supported: false },
       etag: { supported: false },
-      authenticationSchemes: [{ type: 'oauthbearertoken', name: 'Bearer token', description: 'The SCIM token from Admin → API access.', primary: true }],
+      authenticationSchemes: [{ type: 'oauthbearertoken', name: 'Bearer token', description: 'The SCIM token from API & SCIM in the app.', primary: true }],
       meta: { resourceType: 'ServiceProviderConfig', location: `${base}/scim/v2/ServiceProviderConfig` },
     })
   )

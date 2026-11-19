@@ -79,6 +79,15 @@ Any IMAP server. TLS on port 993, or STARTTLS on 143. Certificates are always ve
 the provider offers app passwords, use one. Folder names may contain letters, digits, spaces
 and `. _ - / [ ] & +`.
 
+Common providers:
+
+| Provider | Server | Password |
+|---|---|---|
+| Gmail / Google Workspace | `imap.gmail.com` | an [app password](https://myaccount.google.com/apppasswords) (needs 2-Step Verification on the account; a Workspace admin may have to allow it). IMAP is on by default. |
+| Fastmail | `imap.fastmail.com` | an app password (*Settings → Privacy & Security → App passwords*) |
+| iCloud Mail | `imap.mail.me.com` | an app-specific password from your Apple Account |
+| Microsoft 365 | — | basic IMAP passwords are switched off: use the Microsoft 365 kind below |
+
 ### Microsoft 365 (unverified)
 
 > **Unverified.** This was built from Microsoft's documentation and tested against a local

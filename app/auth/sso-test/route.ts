@@ -1,5 +1,5 @@
 // POST /auth/sso-test: an owner tests the draft single sign-on connection with
-// a real sign-in (opened in a new window from Admin → Sign-in). The flow comes
+// a real sign-in (opened in a new window from the Sign-in page). The flow comes
 // back to /auth/callback, which recognizes the test from the login-state
 // cookie, records the outcome and issues no session.
 

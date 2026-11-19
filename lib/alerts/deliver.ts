@@ -120,7 +120,7 @@ async function sendOne(pool: Pool, d: Claimed, o: Overrides, env: Env): Promise<
 
   if (ch.kind === 'email') {
     const cfg = await (o.smtp ? o.smtp() : smtpFromSettings(env))
-    if (!cfg) throw new Permanent('SMTP is not configured (Admin → Settings)')
+    if (!cfg) throw new Permanent('SMTP is not configured (Settings → Email delivery)')
     const to = ch.config?.recipients ?? []
     const { subject, text } = renderEmail(content, appName)
     try {

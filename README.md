@@ -45,42 +45,52 @@ synthetic reports so there is something to look at.
 
 ```bash
 cp .env.example .env
-echo 'AUTH_ALLOW_INSECURE_NONE=true' >> .env
+printf 'AUTH_PROVIDER=none\nAUTH_ALLOW_INSECURE_NONE=true\n' >> .env
 python3 scripts/demo_reports.py demo-reports
 docker compose up -d --build
 docker compose run --rm ingest import /reports
 ```
 
-Open http://localhost:3000. (`.env.example` ships with `AUTH_PROVIDER=none`, which the
-production image refuses unless `AUTH_ALLOW_INSECURE_NONE=true` says you mean it. Compose
-publishes the port on localhost only. Remove that line and pick a real sign-in method before
-anyone else can reach it.)
+Open http://localhost:3000. The second line turns sign-in off, which the production image only
+accepts with `AUTH_ALLOW_INSECURE_NONE=true`; Compose publishes the port on localhost only. For
+real use, start from a fresh `.env` as below.
 
 ## Set it up for real
 
-1. **Create a mailbox for reports** (for example `dmarc-reports@yourdomain.com`) that can be
-   read over IMAP: with a password or app password, or as Microsoft 365 or Google Workspace
-   through OAuth (see [docs/mail.md](docs/mail.md)).
-2. **Ask for reports.** For each domain, publish a TXT record at `_dmarc.<domain>`:
+**1. Deploy it.** The app needs PostgreSQL and three variables: `DATABASE_URL`, `APP_URL` (its
+public https address) and `APP_SECRET` (`openssl rand -base64 32`). Step-by-step guides for
+Docker Compose, Kubernetes, Google Cloud Run and Vercel are in
+[docs/deployment.md](docs/deployment.md).
 
-   ```
-   v=DMARC1; p=none; rua=mailto:dmarc-reports@yourdomain.com
-   ```
+**2. Create the owner account.** Open the app: it starts a setup wizard. The one-time
+**setup token** it asks for is in the app's server log (search for `[setup]`). If you can't
+find it, the setup page can write a new one to the log.
+[Where to find it on each platform](docs/deployment.md#first-start-create-the-owner).
 
-   `p=none` only monitors. If the mailbox is on a different domain than the one being
-   monitored, the mailbox's domain must also publish
-   `<monitored-domain>._report._dmarc.<mailbox-domain>  TXT  "v=DMARC1"`.
-3. **Deploy** the web app, the database and the ingest worker. `DATABASE_URL`, `APP_URL`
-   and `APP_SECRET` are enough to start: the app then serves a setup wizard that creates the owner
-   account — see [docs/deployment.md](docs/deployment.md) (Docker Compose, Kubernetes, Google
-   Cloud Run, Vercel) and the deployment guide's upgrade notes when coming from 1.1.
-4. **Choose how people sign in** — see [docs/authentication.md](docs/authentication.md).
-5. **Configure** the mailbox and monitored domains under **Mailboxes** and **Monitored domains** in the sidebar
-   ([docs/mail.md](docs/mail.md)), and retention and the rest under **Settings** or in the
-   environment ([docs/configuration.md](docs/configuration.md)).
+**3. Connect a mailbox for reports.** Use a dedicated mailbox, for example
+`dmarc-reports@yourdomain.com`, readable over IMAP. A Gmail or Google Workspace address with
+an app password works, as does any IMAP host. Add it under **Mailboxes**, or as `IMAP_*`
+variables on Vercel. See [docs/mail.md](docs/mail.md).
 
-Reports usually start arriving 24–48 hours after the DNS record goes live, and domains appear
-on the dashboard automatically.
+**4. List your domains** under **Monitored domains**. Reports about any other domain are
+ignored, since anyone can email a report to the mailbox.
+
+**5. Ask for reports.** For each domain, publish a TXT record at `_dmarc.<domain>`:
+
+```
+v=DMARC1; p=none; rua=mailto:dmarc-reports@yourdomain.com
+```
+
+`p=none` only monitors; it changes nothing for your mail. If the mailbox is on a different
+domain than the one being monitored, that mailbox domain must also publish
+`<monitored-domain>._report._dmarc.<mailbox-domain>  TXT  "v=DMARC1"`.
+
+Reports usually start arriving 24–48 hours after the DNS record goes live, and domains appear on
+the dashboard automatically. Afterwards, as needed: invite people and choose how they sign in
+([docs/authentication.md](docs/authentication.md), [docs/sso.md](docs/sso.md)), set up alerts
+([docs/alerts.md](docs/alerts.md)), and see every setting in
+[docs/configuration.md](docs/configuration.md). Upgrading from 1.1? See the
+[upgrade notes](docs/deployment.md#from-11x-to-20).
 
 ## Development
 
@@ -88,7 +98,7 @@ Requirements: Node.js 20.9+, Python 3.11+, PostgreSQL 13+.
 
 ```bash
 npm ci
-cp .env.example .env.local                 # point DATABASE_URL at your database
+cp .env.example .env.local                 # set DATABASE_URL, and APP_SECRET (or AUTH_PROVIDER=none to skip sign-in)
 DATABASE_URL=... npm run db:migrate        # the migration script does not read .env.local
 npm run dev
 

@@ -8,6 +8,14 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Changed — setup and documentation
+
+- `.env.example` leaves `AUTH_PROVIDER` unset (sign-in managed in the app), the default for a
+  real deployment. The five-minute demo turns sign-in off explicitly.
+- Deployment guide: a "First start" section (the setup token on each platform), a step-by-step
+  Vercel guide, Docker Compose with the mailbox worker by default, and Kubernetes manifests for
+  2.0 including the worker.
+
 ### Changed — interface redesign
 
 - A new interface: a sidebar groups every page (Monitor; Data & alerting; Access; System), with
@@ -25,6 +33,13 @@ Upgrading: deploy the new images, then run the migration command
 
 ### Added
 
+- **Setup token, easier to find:** `/setup` says when the newest token was written to the log,
+  where to find it on each platform, and has a **Write a new token to the log** button for when
+  the line is gone (a platform keeping an hour of logs). The token is still never shown on the
+  page; earlier tokens keep working, at most five are usable at once, and one can be requested
+  per minute.
+- **Vercel:** the Mailboxes page explains that Vercel reads the mailbox from the `IMAP_*`
+  variables, and which one is set.
 - A **health score** (0–100, graded A–F) per domain and, weighted by volume, for all of them:
   authentication rate (50), published policy (30) and DKIM coverage (20), minus 10 for each
   failing DMARC or SPF check. Every page that shows it also shows how it was made up

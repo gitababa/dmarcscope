@@ -6,6 +6,7 @@
 //   POST /setup/account   the owner's address, name and password
 //   POST /setup/totp      a code from the authenticator app: creates the owner
 //   POST /setup/restart   start over
+//   POST /setup/new-token write a new setup token to the server log
 
 import { NextResponse, type NextRequest } from 'next/server'
 import { authProvider } from '@/lib/auth'
@@ -19,7 +20,7 @@ import { passwordProblem } from '@/lib/auth/password-policy'
 import { cookieOptions, purposeCookieName, sealSession, sessionCookieName } from '@/lib/auth/session'
 import { addressKey, isThrottled, recordThrottleFailure } from '@/lib/auth/throttle'
 import { configStore, getSessionTtlSeconds } from '@/lib/settings'
-import { type TokenRef, checkSetupToken, completeSetup, ownerExists } from '@/lib/setup'
+import { type TokenRef, checkSetupToken, completeSetup, ownerExists, reissueSetupToken } from '@/lib/setup'
 import { RECOVERY_TTL_SECONDS, SETUP_TTL_SECONDS, sealRecoveryCodes, sealSetupState, unsealSetupState } from '@/lib/setup-state'
 
 export const dynamic = 'force-dynamic'
@@ -31,7 +32,7 @@ type Ctx = { params: Promise<{ step: string }> }
 
 export async function POST(req: NextRequest, { params }: Ctx) {
   const { step } = await params
-  if (!['token', 'account', 'totp', 'restart'].includes(step)) return notFoundResponse()
+  if (!['token', 'account', 'totp', 'restart', 'new-token'].includes(step)) return notFoundResponse()
   if (!isSameOrigin(req)) return forbiddenOrigin()
 
   const db = getPool()
@@ -57,6 +58,19 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   }
 
   if (step === 'restart') return clearState(back())
+
+  // ---------- a new token in the log ----------
+  // The page never shows it: it goes to the server log, like the first one.
+  if (step === 'new-token') {
+    if (ip && (await isThrottled(db, addressKey('setup', ip)))) return back('locked')
+    const result = await reissueSetupToken(db)
+    if (!result.ok) {
+      if (result.reason === 'owner_exists') return notFoundResponse()
+      return back(result.reason === 'cooldown' ? 'token_cooldown' : 'form')
+    }
+    await recordAudit(db, { action: 'setup_token_requested', actor, detail: {} })
+    return clearState(seeOther('/setup?done=new_token'))
+  }
 
   // ---------- 1. setup token ----------
   if (step === 'token') {

@@ -150,7 +150,7 @@ def run_ingest(
         try:
             if mailbox_id is not None and settings.allowed_domains is None:
                 raise RunRefused(
-                    "no monitored domains are configured: add the domains you monitor under Admin → Domains "
+                    "no monitored domains are configured: add the domains you monitor under Monitored domains "
                     "(or set ALLOWED_DOMAINS) before reports are read"
                 )
             if housekeeping:

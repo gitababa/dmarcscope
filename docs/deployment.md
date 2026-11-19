@@ -34,40 +34,72 @@ On a large database, cap query time in PostgreSQL as well:
 `ALTER ROLE <app user> SET statement_timeout = '30s'` (see `DATABASE_QUERY_TIMEOUT_MS` in
 [configuration.md](configuration.md)).
 
+## First start: create the owner
+
+Every deployment ends the same way: open the app and create the owner account.
+
+1. Open `https://<your APP_URL>/`. With no owner yet, it sends you to **/setup**.
+2. Enter the **setup token**. The app writes it to its **server log** when it starts (and when
+   `/setup` is opened while there is none), never to the page, so only someone who runs the
+   server can create the owner. Search the log for `[setup]`:
+
+   | Platform | Where |
+   |---|---|
+   | Docker Compose | `docker compose logs web \| grep setup` |
+   | Kubernetes | `kubectl logs deploy/dmarcscope-web \| grep setup` |
+   | Vercel | the project → **Logs**, search `[setup]` (the Hobby plan keeps one hour of logs) |
+   | Cloud Run | the service → **Logs** |
+
+   Missed it, or the log is gone? Press **Write a new token to the log** on `/setup` and look
+   again. Earlier tokens keep working, each is valid for 24 hours, and the page tells you when
+   the newest one was written. Or choose the token yourself: set `SETUP_TOKEN` (24 characters
+   or more, e.g. `openssl rand -hex 16`) and restart or redeploy.
+3. Enter your email address and a password, then scan the QR code with an authenticator app.
+4. Save the ten **recovery codes** you are shown, once.
+
+Then, in the app: add the domains you monitor (**Monitored domains**), connect the reports
+mailbox (**Mailboxes**, or the `IMAP_*` variables on Vercel), and publish a DMARC record for
+each domain that sends reports to that mailbox (see the README). Reports arrive within a day
+or two.
+
 ## Docker Compose (single host)
 
 ```bash
-cp .env.example .env        # set APP_URL, APP_SECRET, IMAP_*; AUTH_PROVIDER and access lists if you use them
+cp .env.example .env
+# In .env, set at least:
+#   APP_URL            the public https address, e.g. https://dmarc.example.com
+#   APP_SECRET         openssl rand -base64 32
+#   CRON_SECRET        openssl rand -hex 32
+#   POSTGRES_PASSWORD  letters and digits only
 docker compose up -d --build
+docker compose --profile serve up -d     # the worker that reads the mailboxes set up in the app
+docker compose logs web | grep setup     # the setup token, for the first start
 ```
 
-This runs PostgreSQL, applies migrations, and serves the dashboard on `127.0.0.1:3000`. Put a
-TLS reverse proxy (Caddy, nginx, Traefik) on the same host in front of it. To publish the port
-on another address or port, set `WEB_BIND` / `WEB_PORT` in `.env`.
+This runs PostgreSQL, applies migrations, serves the dashboard on `127.0.0.1:3000`, and runs the
+worker that reads the mailboxes you add under **Mailboxes**. Put a TLS reverse proxy (Caddy,
+nginx, Traefik) on the same host in front of it. To publish the port on another address or
+port, set `WEB_BIND` / `WEB_PORT` in `.env`. Then [create the owner](#first-start-create-the-owner).
 
 ### The worker in serve mode
 
-To read mailboxes set up in the browser (Mailboxes), start the long-running worker as well.
-It needs `APP_SECRET` in `.env`, the same one the web app uses:
-
-```bash
-docker compose --profile serve up -d
-```
-
-It stops cleanly on `docker compose stop` (it finishes the message in hand). It is a separate
-profile so that a 1.1 setup without `APP_SECRET` keeps starting exactly as before.
+The `serve` profile above is the long-running worker that reads the mailboxes set up in the
+browser. It needs `APP_SECRET` in `.env`, the same one the web app uses. It stops cleanly on
+`docker compose stop` (it finishes the message in hand). It is a separate profile so that a 1.1
+setup without `APP_SECRET` keeps starting exactly as before.
 
 ### Scheduled jobs
 
-With the mailbox in `IMAP_*` (1.1 style), schedule the jobs from the host's crontab:
+DNS checks keep each domain's DNS health and SPF attribution current. With the mailbox in
+`IMAP_*` (1.1 style) instead of the browser, schedule the ingest job too. From the host's crontab:
 
 ```cron
 0 6 * * *   cd /opt/dmarcscope && docker compose run --rm ingest
 30 6 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" https://dmarc.example.com/api/cron/dns-check
 ```
 
-Set `POSTGRES_PASSWORD` in `.env` before the first start (letters and digits only — it is
-placed in a connection URL), and back up the `pgdata` volume.
+Set `POSTGRES_PASSWORD` before the first start (it is placed in a connection URL, hence letters
+and digits only), and back up the `pgdata` volume.
 
 ## Kubernetes
 
@@ -88,12 +120,12 @@ spec:
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
       initContainers:
         - name: migrate
-          image: registry.example.com/dmarcscope:1.0.0
+          image: registry.example.com/dmarcscope:2.0.0
           command: ['node', 'scripts/migrate.mjs']
           envFrom: [{ secretRef: { name: dmarcscope } }]
       containers:
         - name: web
-          image: registry.example.com/dmarcscope:1.0.0
+          image: registry.example.com/dmarcscope:2.0.0
           ports: [{ containerPort: 3000 }]
           envFrom: [{ secretRef: { name: dmarcscope } }]
           readinessProbe: { httpGet: { path: /api/readyz, port: 3000 } }
@@ -108,6 +140,27 @@ spec:
   selector: { app: dmarcscope-web }
   ports: [{ port: 80, targetPort: 3000 }]
 ---
+# The worker that reads the mailboxes set up in the browser. One replica is
+# enough; more are safe.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: dmarcscope-worker }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dmarcscope-worker } }
+  template:
+    metadata: { labels: { app: dmarcscope-worker } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: registry.example.com/dmarcscope-ingest:2.0.0
+          args: ['serve']
+          envFrom: [{ secretRef: { name: dmarcscope } }]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          resources: { requests: { cpu: 50m, memory: 192Mi }, limits: { memory: 1Gi } }
+---
+# Only for a mailbox in IMAP_* (1.1 style) instead of the browser.
 apiVersion: batch/v1
 kind: CronJob
 metadata: { name: dmarcscope-ingest }
@@ -123,7 +176,7 @@ spec:
           securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
           containers:
             - name: ingest
-              image: registry.example.com/dmarcscope-ingest:1.0.0
+              image: registry.example.com/dmarcscope-ingest:2.0.0
               envFrom: [{ secretRef: { name: dmarcscope } }]
               securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
               resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
@@ -166,25 +219,54 @@ Apps + Container Apps job + Azure Database for PostgreSQL).
 
 ## Vercel
 
-The repository is also deployable to Vercel as-is: the Next.js app, plus the ingest worker as
-a Python function (`api/cron/ingest.py`) triggered by the crons in `vercel.json`.
+The repository deploys to Vercel as-is: the Next.js app, plus the ingest worker as a Python
+function (`api/cron/ingest.py`) that Vercel Cron calls once a day (`vercel.json`).
 
-1. Import the repository and attach a PostgreSQL database (any provider; set `DATABASE_URL`).
-2. Set the environment variables from `.env.example`, including a `CRON_SECRET` you generate
-   yourself (`openssl rand -hex 32`). Vercel sends it as the bearer token on every cron
-   call; without it the crons are answered with 401.
-3. Apply migrations from your machine: `DATABASE_URL=… npm run db:migrate`.
+**One difference from the other platforms:** Vercel cannot run the long-lived worker that reads
+the mailboxes you set up in the browser. On Vercel the reports mailbox goes in **environment
+variables** (`IMAP_*`), and the daily cron reads it. Everything else (domains, people, alerts,
+settings) is set up in the browser as usual.
 
-Keep `CRON_SECRET` in Vercel's environment even though the owner can also set a machine endpoint
-token in the panel: Vercel Cron sends the environment variable, and the Python ingest function
-reads its configuration from the environment only.
+1. **Import the repository** in Vercel (*Add New → Project*). The defaults are right.
+2. **Add a database.** *Storage → Create → Neon* (or any PostgreSQL), connected to the project.
+   It sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED` for you.
+3. **Set the environment variables** (*Settings → Environment Variables*, Production):
 
-The shipped crons are daily (ingest 06:00, DNS checks 06:30, alerts 07:00 UTC), which is what
-the Hobby plan allows. For faster alert evaluation see [alerts.md](alerts.md). With a Neon
-database from the Vercel integration, use the unpooled connection string for migrations.
+   | Variable | Value |
+   |---|---|
+   | `APP_URL` | the production address, e.g. `https://dmarcscope-you.vercel.app` |
+   | `APP_SECRET` | `openssl rand -base64 32` — keep a copy: secrets saved in the app need it |
+   | `CRON_SECRET` | `openssl rand -hex 32` — Vercel Cron sends it; without it the crons get 401 |
+   | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD` | the reports mailbox, e.g. `imap.gmail.com`, the address, an [app password](mail.md#imap-with-a-password) |
 
-Vercel functions have a hard time limit, so the function variant of the ingest job defaults
-to a 170-second mailbox budget per run; a large backlog is worked through over several runs.
+4. **Create the tables** once, and again after each upgrade, from a checkout of the same
+   version, with the *unpooled* connection string (*Storage → your database → .env.local*):
+
+   ```bash
+   DATABASE_URL='postgres://…unpooled…' npm run db:migrate
+   ```
+
+5. **Redeploy** (*Deployments → ⋯ → Redeploy*) so the variables take effect, then
+   [create the owner](#first-start-create-the-owner). The token is in the project's **Logs**;
+   the Hobby plan keeps an hour of them, so if it is gone, press **Write a new token to the log**
+   on `/setup`.
+6. In the app, add your domains under **Monitored domains**, **before the first daily run**:
+   the cron keeps only reports about the listed domains, but while the list is empty it keeps
+   reports about *any* domain (anyone can email one to your mailbox). `ALLOWED_DOMAINS`, if set,
+   wins over the list.
+
+Good to know:
+
+- The crons run daily: ingest at 06:00, DNS checks at 06:30, alerts at 07:00 UTC. That is what
+  the Hobby plan allows. Reports are not urgent, so daily is enough; for faster alerts see
+  [alerts.md](alerts.md).
+- The ingest function stops reading after about 170 seconds per run (Vercel's time limit); a
+  large backlog is worked through over several days.
+- Vercel's *Deployment Protection* puts preview deployments behind a Vercel sign-in. The
+  production address is reachable, and protected by the app's own sign-in.
+- `CRON_SECRET` stays in Vercel's environment even though the owner can also set a machine
+  endpoint token in the app: Vercel Cron sends the environment variable, and the Python function
+  reads its configuration from the environment only.
 
 ## Upgrades and backups
 
