@@ -122,6 +122,7 @@ node scripts/secrets-reencrypt.mjs   # npm run secrets:reencrypt: after changing
 
 ```bash
 python -m ingestor serve            # keep running: the mailboxes set up in the panel (needs APP_SECRET)
+python -m ingestor pass             # one bounded pass, for a scheduler: what serve does, once (needs APP_SECRET)
 python -m ingestor run              # mailbox → database, retention, reverse-DNS backfill
 python -m ingestor import PATH...   # load .xml / .gz / .zip / .eml files or directories
 python -m ingestor enrich           # reverse-DNS backfill only

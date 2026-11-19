@@ -44,6 +44,8 @@ services:
       # published with WEB_BIND / WEB_PORT instead.
       PORT: '3000'
       HOSTNAME: 0.0.0.0
+      # Lets the in-app deployment guide open on the Docker Compose page.
+      DMARCSCOPE_COMPOSE: '1'
     ports:
       # Loopback only by default: put a TLS reverse proxy in front, or set
       # WEB_BIND=0.0.0.0 to publish the port directly.

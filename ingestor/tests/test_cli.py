@@ -77,3 +77,12 @@ def test_a_fatal_error_exits_1_with_an_error_line(monkeypatch, capsys):
     monkeypatch.setattr(runner, "run_ingest", boom)
     code, out = _run(capsys, ["run"])
     assert code == 1 and out == {"ok": False, "error": "OSError: mailbox unreachable"}
+
+
+def test_pass_prints_counts_only(monkeypatch, capsys):
+    from ingestor import oneshot
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(oneshot, "scheduled_pass", lambda s: {"requests": 1, "mailboxes_run": 2, "problems": ["mailbox 3: secret text"]})
+    code, out = _run(capsys, ["pass"])
+    assert code == 0 and out == {"ok": False, "requests": 1, "mailboxes_run": 2, "problems": 1}

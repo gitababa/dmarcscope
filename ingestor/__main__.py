@@ -22,6 +22,11 @@ def main(argv: list[str] | None = None) -> int:
     imp.add_argument("paths", nargs="+")
     sub.add_parser("enrich", help="backfill reverse DNS for sending IPs")
     sub.add_parser("serve", help="keep running: read the mailboxes configured in the panel on their schedule")
+    sub.add_parser(
+        "pass",
+        help="one bounded pass, for a scheduler (Cloud Run job, ECS scheduled task): the IMAP_* mailbox, "
+        "waiting panel requests, then panel mailboxes that are due",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -51,6 +56,14 @@ def main(argv: list[str] | None = None) -> int:
             from . import serve
 
             return serve.serve(settings)
+        if args.command == "pass":
+            from . import oneshot
+
+            summary = oneshot.scheduled_pass(settings)
+            # Counts on stdout; the reasons are in the pass record.
+            problems = summary.get("problems", [])
+            print(json.dumps({"ok": not problems, **summary, "problems": len(problems)}))
+            return 0
         # Imported late so that --help works without the parser's dependencies.
         from . import runner
 

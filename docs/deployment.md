@@ -208,14 +208,33 @@ to the IMAP server, the database, and DNS (for reverse lookups).
    `AUTH_PROVIDER=proxy-jwt`, `AUTH_PROXY_PRESET=gcp-iap`, `AUTH_PROXY_AUDIENCE=…` as described
    in [authentication.md](authentication.md). Restrict the service's ingress so it is only
    reachable through IAP.
-4. **Ingest** — build `Dockerfile.ingest`, deploy as a Cloud Run **job**, and trigger it daily
-   with Cloud Scheduler.
-5. **DNS checks** — a second Cloud Scheduler job calling `/api/cron/dns-check` with the bearer
-   token. Because IAP protects the public URL, either call the service's internal URL or grant
-   the scheduler's service account access through IAP.
+4. **Ingest** — build `Dockerfile.ingest` and deploy a Cloud Run **job** with the command
+   `python -m ingestor pass`, the same `APP_SECRET` as the web app, and Cloud Scheduler starting
+   it every 15 to 60 minutes. Each run is one bounded pass: the mailbox in `IMAP_*` if one is
+   set, waiting **Test connection** and **Run now** requests, then the mailboxes set up in the
+   app that are due. So requests made in the app are carried out at the next call. A job task
+   may run 10 minutes by default; keep the pass inside it:
 
-The same shape works on AWS (ECS/Fargate service + scheduled task + RDS) and Azure (Container
-Apps + Container Apps job + Azure Database for PostgreSQL).
+   ```bash
+   gcloud run jobs deploy dmarcscope-ingest --image …/dmarcscope-ingest \
+     --args pass --task-timeout 10m --memory 512Mi \
+     --set-env-vars INGEST_PASS_BUDGET_SECONDS=540,INGEST_TIME_BUDGET_SECONDS=420
+   ```
+
+   (`python -m ingestor run`, the earlier setup, reads only the mailbox in `IMAP_*`.)
+5. **DNS checks and alerts** — two more Cloud Scheduler jobs calling `/api/cron/dns-check`
+   (daily) and `/api/cron/alerts` (every five minutes) with the bearer token; Cloud Run scales
+   the web app to zero, so it cannot time alerts itself. With the ingest job that is three
+   scheduler jobs, the free allowance per billing account. Because IAP protects the public URL,
+   either call the service's internal URL or grant the scheduler's service account access
+   through IAP.
+
+The same shape works on AWS (ECS/Fargate service + scheduled task running `pass` + RDS) and
+Azure (Container Apps + Container Apps job running `pass` + Azure Database for PostgreSQL).
+
+The app has a **Deployment guide** (in the sidebar, for administrators, and on the setup page)
+with these steps per platform, and resource and schedule recommendations for your number of
+report emails a day.
 
 ## Vercel
 

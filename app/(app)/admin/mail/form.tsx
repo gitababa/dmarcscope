@@ -221,7 +221,7 @@ export function nextRunLabel(m: Pick<MailboxRow, 'enabled' | 'next_run_at'>, unt
 // A mailbox asking to be read more often than the deployment's scheduler
 // actually calls (Vercel Hobby: once a day) is read at the scheduler's pace.
 export function scheduleWarning(m: Pick<MailboxRow, 'enabled' | 'interval_minutes'>, passes: PassStatus | null): string | null {
-  if (!m.enabled || !passes?.typicalGapMinutes || !startsWorkItself()) return null
+  if (!m.enabled || !passes?.typicalGapMinutes || !passes.lastAt) return null
   if (passes.typicalGapMinutes <= m.interval_minutes * 1.5) return null
   return `Automatic runs happen about every ${everyLabel(passes.typicalGapMinutes)} on this deployment, so this mailbox is read at that pace. Run now reads it at any time.`
 }
@@ -262,11 +262,23 @@ export function WorkerNotice({ alive, lastSeen, passes }: { alive: number; lastS
       </Notice>
     )
   }
+  // A scheduler running `python -m ingestor pass` (Cloud Run job, ECS
+  // scheduled task) instead of a long-running worker.
+  if (passes?.lastAt && Date.now() - new Date(passes.lastAt).getTime() < 2 * 86_400_000) {
+    return (
+      <Notice tone="info" role="note">
+        <strong>Runs on a schedule.</strong> There is no long-running worker: each scheduled call of{' '}
+        <code>python -m ingestor pass</code> reads the mailboxes that are due and carries out waiting Test connection and Run now
+        requests. The last one ran {relTime(passes.lastAt)}
+        {passes.typicalGapMinutes ? `, about every ${everyLabel(passes.typicalGapMinutes)}` : ''}.
+      </Notice>
+    )
+  }
   return (
     <Notice tone="warn" role="note">
       No worker is running{lastSeen ? ` (last seen ${relTime(lastSeen)})` : ''}. Mailboxes saved here are read by{' '}
       <code>python -m ingestor serve</code>, with the same <code>DATABASE_URL</code> and <code>APP_SECRET</code> as this app (see
-      docs/mail.md). Until one runs, nothing is checked and tests wait.
+      docs/mail.md), or by <code>python -m ingestor pass</code> on a schedule. Until one runs, nothing is checked and tests wait.
     </Notice>
   )
 }

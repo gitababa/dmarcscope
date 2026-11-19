@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Domains' }
 
 const DONE: Record<string, string> = {
-  added: 'Domain added. Its reports are stored from now on, and any held for it are being imported.',
+  added: 'Domain added. Its reports are stored from now on; any held for it are imported shortly, by the next run.',
   removed: 'Domain removed. New reports about it are ignored; reports already stored stay.',
 }
 

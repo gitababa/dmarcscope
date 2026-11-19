@@ -54,6 +54,11 @@ minutes.
 `python -m ingestor run` and `serve` can be used together: `run` reads the environment mailbox,
 `serve` the panel's.
 
+**Without a long-running process** (Cloud Run jobs, ECS scheduled tasks), schedule
+`python -m ingestor pass` every 15 to 60 minutes instead: each call does what `serve` does
+once, within `INGEST_PASS_BUDGET_SECONDS` (default 240). Test connection and Run now are
+then carried out at the next call. Vercel uses the same pass, started by the app itself.
+
 ## Monitored domains
 
 Anyone can email a report about any domain to your mailbox, so DMARCscope only stores reports

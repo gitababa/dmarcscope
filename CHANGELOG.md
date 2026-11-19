@@ -8,6 +8,17 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Added — deployment guide
+
+- **Deployment guide** in the app (sidebar, for administrators, and on the setup page; it also
+  opens once right after setup). Pick Vercel (Hobby or Pro), Docker Compose, Kubernetes or
+  Google Cloud Run for the steps, and enter your report emails per day for recommended
+  resources, schedules, time budgets and retention. The numbers come from measurements
+  (`scripts/sizing_benchmark.py`: about 4 KB of database per report).
+- `python -m ingestor pass`: one bounded pass for schedulers without a long-running process
+  (Cloud Run jobs, ECS scheduled tasks). Mailboxes set up in the app are now read on Google
+  Cloud too; docs/deployment.md is updated.
+
 ### Added — mailboxes on Vercel, and domains found in reports
 
 - **Mailboxes set up in the app now work on Vercel**, on every plan. Each call of the ingest
