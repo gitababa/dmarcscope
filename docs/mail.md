@@ -73,6 +73,15 @@ the panel, and `RETENTION_DAYS=0` means forever, as in 1.1.0.
 Use a mailbox that receives nothing but DMARC reports: the worker marks what it reads as read,
 moves non-reports to a separate folder, and (optionally) moves processed reports.
 
+If the reports arrive in a mailbox you also use for other mail, point the worker at a folder
+that holds only reports. In Gmail and Google Workspace every label is an IMAP folder: have a
+filter apply a label (e.g. `DMARC`) and skip the inbox, then enter that label's name as the
+folder. Don't let the filter mark the messages as read: the worker only reads unread ones.
+The stored password or key still opens the whole mailbox, so a separate mailbox (for example a
+free account added as a member of the group your `rua=` address points to) is safer.
+
+The run history records why a message was not a report, never its subject.
+
 ### IMAP with a password
 
 Any IMAP server. TLS on port 993, or STARTTLS on 143. Certificates are always verified. Where

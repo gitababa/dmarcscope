@@ -63,6 +63,20 @@ def _record_finish(conn, settings: Settings, run_id: int, stats: dict, failed: b
         log.exception("could not record the end of run %s; it will show as unfinished", run_id)
 
 
+def invalid_reason(e: Exception) -> str:
+    """Why a message is not a report, for the run history, without its
+    subject. parsedmarc names a message by its Subject header in most of its
+    errors, and the mailbox may hold personal mail, so such text is replaced
+    by a fixed reason; errors that name no message (size limits, a broken
+    archive) are kept."""
+    text = str(e).replace("\n", " ").strip()
+    if "subject" in text.lower():
+        if isinstance(e, InvalidDMARCReport):
+            return "not a DMARC report"
+        return "not a DMARC report: the message could not be parsed"
+    return f"not a valid DMARC report: {text[:300]}"
+
+
 def _store_parsed(conn, parsed: dict, settings: Settings, stats: dict) -> None:
     """Store one parsed report in its own transaction."""
     report = parsed.get("report")
@@ -170,7 +184,7 @@ def run_ingest(
                     parsed = parse_email(raw)
                 except (InvalidDMARCReport, ParserError) as e:
                     stats["invalid"] += 1
-                    stats["errors"].append({"error": f"not a valid DMARC report: {e}"})
+                    stats["errors"].append({"error": invalid_reason(e)})
                     return "invalid"
                 try:
                     _store_parsed(conn, parsed, settings, stats)
@@ -241,7 +255,7 @@ def import_files(settings: Settings, paths: list[str]) -> dict:
                 parsed = parse_email(data) if path.suffix.lower() in (".eml", ".msg") else parse_file(data)
             except (InvalidDMARCReport, ParserError) as e:
                 stats["invalid"] += 1
-                stats["errors"].append({"file": str(path), "error": f"not a valid DMARC report: {e}"})
+                stats["errors"].append({"file": str(path), "error": invalid_reason(e)})
                 continue
             except OSError as e:
                 stats["errors"].append({"file": str(path), "error": str(e)})
