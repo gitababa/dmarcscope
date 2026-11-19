@@ -8,6 +8,12 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Fixed — privacy
+
+- The run history no longer keeps the subject line of messages that are not reports
+  (parsedmarc names a message by its subject in its errors). Migration `0009` removes subjects
+  already stored. Run the migration command when upgrading.
+
 ### Added — DNS checks
 
 - **MTA-STS, TLS-RPT and BIMI** on the domain page. MTA-STS fetches the policy file (HTTPS, no

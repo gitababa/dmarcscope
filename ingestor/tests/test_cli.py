@@ -43,6 +43,8 @@ def test_import_reports_the_documented_fields_and_exit_codes(monkeypatch, capsys
     code, out = _run(capsys, ["import", str(good)])
     assert code == 1 and out["ok"] is False
     assert (out["stored"], out["invalid"], len(out["errors"])) == (1, 1, 1)
+    # The run history never names a non-report by its subject.
+    assert "Lunch?" not in out["errors"][0]["error"]
 
 
 @pytest.mark.parametrize("target", ["empty-dir", "does-not-exist.xml"])

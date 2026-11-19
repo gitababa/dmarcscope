@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 from dataclasses import replace
 
 import psycopg
@@ -181,3 +182,23 @@ def test_what_one_report_can_write_is_bounded(db_settings, monkeypatch):
     )[0]
     assert keys <= store.MAX_JSON_KEYS and policy == "none" and junk == 255
     assert _rows(db_settings, "SELECT policy_published ? 'deep' FROM reports") == [(False,)]
+
+
+def test_migration_0009_removes_subjects_already_in_run_history(db_settings):
+    from pathlib import Path
+
+    old = [
+        {"uid": "7", "error": 'not a valid DMARC report: Message with subject "Your medical results" is not a valid DMARC report: x'},
+        {"error": "enrichment: TimeoutError: timed out"},
+        "a bare string error",
+    ]
+    with psycopg.connect(db_settings.database_url, autocommit=True) as conn:
+        conn.execute("INSERT INTO ingest_runs (finished_at, errors) VALUES (NOW(), %s::jsonb), (NOW(), NULL)", (json.dumps(old),))
+        migration = Path(__file__).resolve().parents[2] / "db" / "migrations" / "0009_scrub_run_error_subjects.sql"
+        conn.execute(migration.read_text())
+    rows = _rows(db_settings, "SELECT errors FROM ingest_runs ORDER BY id")
+    scrubbed = rows[0][0]
+    assert "medical" not in json.dumps(scrubbed)
+    assert scrubbed[0]["uid"] == "7" and scrubbed[0]["error"].startswith("not a DMARC report (details removed")
+    assert scrubbed[1:] == old[1:]  # other errors untouched, order kept
+    assert rows[1][0] is None

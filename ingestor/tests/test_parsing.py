@@ -61,3 +61,45 @@ def test_rejects_non_reports():
         parse_file(b"<html><body>hello</body></html>")
     with pytest.raises((InvalidDMARCReport, ParserError)):
         parse_file(report_xml(source_ip="not-an-address"))
+
+
+def _private_email(subject: str, attachment: bytes | None = None, date: str = "Sun, 16 Nov 2025 01:00:00 +0000") -> bytes:
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"] = "friend@example.net"
+    msg["To"] = "me@example.com"
+    msg["Subject"] = subject
+    msg["Date"] = date
+    msg.set_content("Personal message.")
+    if attachment is not None:
+        msg.add_attachment(attachment, maintype="application", subtype="zip", filename="report.zip")
+    return msg.as_bytes()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        _private_email("Your medical results are ready"),
+        _private_email("Your medical results are ready", attachment=b"PK\x03\x04 not really a zip"),
+        _private_email("Your medical results are ready", attachment=gz(b"<feedback>broken")),
+    ],
+    ids=["plain", "fake-zip", "broken-xml"],
+)
+def test_the_reason_for_a_non_report_never_names_its_subject(raw):
+    from ingestor.runner import invalid_reason
+
+    with pytest.raises(ParserError) as caught:
+        parse_email(raw)
+    assert "medical" in str(caught.value)  # parsedmarc's own text does name it
+    reason = invalid_reason(caught.value)
+    assert "medical" not in reason.lower() and "subject" not in reason.lower()
+    assert reason.startswith("not a DMARC report")
+
+
+def test_a_reason_that_names_no_message_keeps_its_detail():
+    from ingestor.runner import invalid_reason
+
+    assert invalid_reason(ParserError("Not a valid zip, gzip, json, or xml file")) == (
+        "not a valid DMARC report: Not a valid zip, gzip, json, or xml file"
+    )
