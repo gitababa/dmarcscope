@@ -1,16 +1,21 @@
 import type { Metadata } from 'next'
+import { Icon } from '@/components/icons'
 import Link from 'next/link'
-import { Pill } from '@/components/ui'
-import { listPendingRequests } from '@/lib/admin'
+import {Card,Notice,PageHeader,Pill } from '@/components/ui'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
 import { relTime, untilTime } from '@/lib/format'
 import { KINDS, domainsFromEnvironment, isKind, listDomains, listMailboxes, shortError, workerStatus } from '@/lib/mail'
-import { AdminNav } from '../nav'
 import { MAIL_ERRORS, MAIL_FIELDS, MailboxForm, WorkerNotice, runState } from './form'
 
 export const dynamic = 'force-dynamic'
-export const metadata: Metadata = { title: 'Mail' }
+export const metadata: Metadata = { title: 'Mailboxes' }
+
+const KIND_BLURB: Record<string, string> = {
+  imap: 'Any IMAP server, with a password or app password.',
+  microsoft: 'Exchange Online through an app registration (OAuth).',
+  google: 'Gmail through a service account with domain-wide delegation.',
+}
 
 const DONE: Record<string, string> = {
   deleted: 'Mailbox deleted. The reports it brought in stay.',
@@ -20,39 +25,29 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
   const access = await requirePageRole('admin')
   const { error, field, done, new: adding } = await searchParams
   const db = getPool()
-  const [pending, mailboxes, worker, domains] = await Promise.all([listPendingRequests(access), listMailboxes(db), workerStatus(db), listDomains(db)])
+  const [mailboxes, worker, domains] = await Promise.all([listMailboxes(db), workerStatus(db), listDomains(db)])
   const envDomains = domainsFromEnvironment()
   const noDomains = !envDomains && domains.length === 0
   const newKind = isKind(adding) ? adding : null
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>The mailboxes DMARC reports are read from. The worker checks each on its schedule; you can test one or run it now.</p>
-        </div>
-      </div>
-      <AdminNav current="/admin/mail" pending={pending.length} />
+      <PageHeader title="Mailboxes" lead="The mailboxes DMARC reports are read from. The worker checks each on its schedule; you can test one or run it now." />
 
       {error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {MAIL_ERRORS[error] ?? 'That could not be done.'}
           {error === 'invalid' && field && MAIL_FIELDS[field] ? ` Check: ${MAIL_FIELDS[field]}.` : ''}
-        </div>
+        </Notice>
       )}
       {done && !error && DONE[done] && (
-        <div className="notice ok" role="status">
+        <Notice tone="ok" role="status">
           {DONE[done]}
-        </div>
+        </Notice>
       )}
       {noDomains && (
-        <div className="notice warn" role="note">
-          <span>
-            No monitored domains yet: mailboxes saved here read nothing until you <Link href="/admin/domains">add the domains you monitor</Link>.
-            Reports about any other domain are ignored.
-          </span>
-        </div>
+        <Notice tone="warn" role="note">No monitored domains yet: mailboxes saved here read nothing until you <Link href="/admin/domains">add the domains you monitor</Link>.
+            Reports about any other domain are ignored.</Notice>
       )}
 
       <section className="section" aria-labelledby="mailboxes-head">
@@ -77,6 +72,9 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
             const lastError = m.last_run?.failed ? m.last_run.errors?.[m.last_run.errors.length - 1] : null
             return (
               <div className="person-row" role="listitem" key={m.id}>
+                <span className={`row-icon ${s.tone === 'ok' ? 'ok' : s.tone === 'bad' ? 'bad' : s.tone === 'warn' ? 'warn' : ''}`}>
+                  <Icon name="inbox" size={16} />
+                </span>
                 <div className="person-who">
                   <div className="source-name">
                     <Link href={`/admin/mail/${m.id}`}>{m.name}</Link>
@@ -92,7 +90,12 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
                   {lastError && <div className="tone-bad small">{shortError(lastError, 160)}</div>}
                 </div>
                 <div className="person-tags">
-                  <Pill tone={s.tone}>{s.label}</Pill>
+                  <Pill tone={s.tone} dot>
+                    {s.label}
+                  </Pill>
+                  <Link href={`/admin/mail/${m.id}`} className="btn btn-sm btn-ghost">
+                    Open <Icon name="chevronRight" size={13} />
+                  </Link>
                 </div>
               </div>
             )
@@ -108,10 +111,13 @@ export default async function AdminMailPage({ searchParams }: { searchParams: Pr
           {newKind ? (
             <MailboxForm kind={newKind} />
           ) : (
-            <nav className="inline-form" aria-label="Kind of mailbox">
+            <nav className="kind-picker" aria-label="Kind of mailbox">
               {(Object.keys(KINDS) as Array<keyof typeof KINDS>).map((k) => (
-                <Link key={k} href={`/admin/mail?new=${k}#add-head`} className="btn btn-sm">
-                  {KINDS[k].label}
+                <Link key={k} href={`/admin/mail?new=${k}#add-head`} className="kind-option">
+                  <strong>
+                    <Icon name={k === 'imap' ? 'server' : 'mail'} size={16} /> {KINDS[k].label}
+                  </strong>
+                  <span>{KIND_BLURB[k] ?? ''}</span>
                 </Link>
               ))}
             </nav>

@@ -3,13 +3,30 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { runDnsCheckAction } from '@/app/actions'
 import { SubmitButton } from '@/components/client'
-import { CategoryPill, Pill, RangeSwitcher, RateCell, Section, SourceCell } from '@/components/ui'
+import { Icon } from '@/components/icons'
+import {
+  Card,
+  CategoryPill,
+  Donut,
+  EmptyState,
+  GradeBadge,
+  HealthBreakdown,
+  HealthRing,
+  Notice,
+  PageHeader,
+  Pill,
+  RangeSwitcher,
+  RateCell,
+  SourceCell,
+  policyLabel,
+} from '@/components/ui'
 import { VolumeChart } from '@/components/VolumeChart'
 import { atLeast } from '@/lib/auth/roles'
 import { requireViewer } from '@/lib/auth/server'
 import type { CheckStatus, DnsCheckResults } from '@/lib/dns-checks'
 import { isValidDomainName } from '@/lib/dns-run'
 import { fmtDate, fmtInt, parseRange, pct, policyTone, rangeLabel, rangeParam, relTime } from '@/lib/format'
+import { domainHealth } from '@/lib/health'
 import {
   getAlignmentBreakdown,
   getDomainPolicy,
@@ -68,116 +85,187 @@ export default async function DomainPage({
   const advice = policyAdvice({ policy: policy.policy, total30d: total30, passed30d: last30.dmarc_pass })
   const path = `/domains/${encodeURIComponent(domain)}`
   const range = rangeParam(days)
+  const health = domainHealth({
+    total,
+    dmarcPass: alignment.dmarc_pass,
+    dkimPass: alignment.fully_aligned + alignment.dkim_only,
+    policy: policy.policy,
+    dns: dnsCheck ? { dmarc: dnsCheck.dmarc.status, spf: dnsCheck.spf.status } : null,
+  })
+  const failingSources = sources.filter((s) => s.failed > 0).length
 
   return (
     <>
-      <Link href={`/?range=${range}`} className="crumb">
-        ← All domains
-      </Link>
-      <div className="page-head">
-        <div>
-          <h1>{domain}</h1>
-          <p>
+      <PageHeader
+        crumbs={[{ href: `/domains?range=${range}`, label: 'Domains' }, { label: domain }]}
+        title={domain}
+        badge={
+          <>
+            <GradeBadge grade={health.grade} />
+            <Pill tone={policyTone(policy.policy)}>{policyLabel(policy.policy)}</Pill>
+          </>
+        }
+        lead={
+          <>
             {rangeLabel(days)} · {fmtInt(total)} messages
-            {total > 0 && <> · {pct(alignment.dmarc_pass / total)} DMARC compliant</>}
-          </p>
-        </div>
-        <RangeSwitcher basePath={path} active={days} />
-      </div>
-      <p className="small" style={{ margin: '0 0 0.8rem' }}>
-        Download as CSV:{' '}
-        <a href={`${path}/export?range=${range}&dataset=sources`}>sources</a> · <a href={`${path}/export?range=${range}&dataset=timeseries`}>volume per day</a>
-      </p>
+            {total > 0 && <> · {pct(alignment.dmarc_pass / total)} DMARC compliant</>} · latest report {fmtDate(policy.latest_report_end)}
+          </>
+        }
+        actions={
+          <>
+            <a className="btn btn-sm" href={`${path}/export?range=${range}&dataset=sources`} download>
+              <Icon name="download" size={14} /> Sources CSV
+            </a>
+            <a className="btn btn-sm" href={`${path}/export?range=${range}&dataset=timeseries`} download>
+              <Icon name="download" size={14} /> Daily CSV
+            </a>
+            <RangeSwitcher basePath={path} active={days} />
+          </>
+        }
+      />
 
-      <div className={`notice ${advice.tone === 'info' ? '' : advice.tone}`}>
-        <span>
-          <strong>{advice.title}.</strong> {advice.detail}
-        </span>
-        {(advice.tone === 'warn' || advice.tone === 'bad') && (
-          <Link href={`/issues?range=30d&domain=${encodeURIComponent(domain)}`} className="btn btn-sm">
-            View issues
-          </Link>
-        )}
-      </div>
-
-      <Section title="Published DMARC policy">
-        <div className="card">
-          <div className="kv-grid">
-            <Kv label="Policy (p)">
-              <Pill tone={policyTone(policy.policy)}>{policy.policy || 'unknown'}</Pill>
-            </Kv>
-            <Kv label="Subdomains (sp)">{policy.subdomain_policy || 'inherits p'}</Kv>
-            <Kv label="Applied to (pct)">{policy.pct || '100'}%</Kv>
-            <Kv label="DKIM alignment">{policy.adkim === 's' ? 'strict' : 'relaxed'}</Kv>
-            <Kv label="SPF alignment">{policy.aspf === 's' ? 'strict' : 'relaxed'}</Kv>
-            <Kv label="Latest report">{fmtDate(policy.latest_report_end)}</Kv>
-          </div>
-          <p className="muted small" style={{ margin: '0.9rem 0 0' }}>
-            As seen by receivers in the most recent report. Run the DNS checks below for what is published right now.
-          </p>
-        </div>
-      </Section>
-
-      <Section
-        title="DNS health"
+      <Notice
+        tone={advice.tone}
         action={
-          isAdmin && (
-            <form action={runDnsCheckAction}>
-              <input type="hidden" name="domain" value={domain} />
-              <input type="hidden" name="range" value={range} />
-              <SubmitButton className="btn btn-primary btn-sm" pendingLabel="Checking DNS…">
-                {dnsCheck ? 'Re-run checks' : 'Run checks'}
-              </SubmitButton>
-            </form>
-          )
+          (advice.tone === 'warn' || advice.tone === 'bad') && failingSources > 0 ? (
+            <Link href={`/issues?range=30d&domain=${encodeURIComponent(domain)}`} className="btn btn-sm">
+              View issues
+            </Link>
+          ) : undefined
         }
       >
-        {notice === 'cooldown' && (
-          <div className="notice">Checks ran a moment ago — showing those results. Try again in a few seconds.</div>
-        )}
-        {dnsCheck == null ? (
-          <div className="empty">
-            No DNS checks have been run for this domain yet.{' '}
-            {isAdmin
-              ? 'Run them to see its live MX, SPF, DMARC and DKIM records.'
-              : 'An administrator can run them to show its live MX, SPF, DMARC and DKIM records.'}
+        <strong>{advice.title}.</strong> {advice.detail}
+      </Notice>
+
+      <div className="grid-3">
+        <Card title="Health score" icon="shield" sub="How it is made up">
+          <div className="row" style={{ gap: '1rem', marginBottom: '1.1rem' }}>
+            <HealthRing health={health} size={96} caption="of 100" />
+            <div>
+              <GradeBadge grade={health.grade} large />
+              <p className="muted small" style={{ margin: '0.4rem 0 0' }}>
+                Over {rangeLabel(days).toLowerCase()}.
+              </p>
+            </div>
           </div>
-        ) : (
-          <DnsHealthCard check={dnsCheck} />
-        )}
-      </Section>
+          <HealthBreakdown health={health} />
+        </Card>
 
-      <Section title="Volume">
-        <VolumeChart data={timeseries} />
-      </Section>
+        <Card title="Alignment" icon="layers" sub="Which mechanism carries DMARC">
+          {total === 0 ? (
+            <EmptyState icon="layers">No reports in this range — try a wider one.</EmptyState>
+          ) : (
+            <>
+              <div style={{ display: 'grid', placeItems: 'center', marginBottom: '1rem' }}>
+                <Donut
+                  parts={ALIGN_PARTS(alignment)}
+                  center={pct(alignment.dmarc_pass / total)}
+                  caption="pass"
+                  size={140}
+                  stroke={18}
+                />
+              </div>
+              <div className="option-list" style={{ gap: '0.5rem' }}>
+                {ALIGN_PARTS(alignment).map((p) => (
+                  <div className="legend-row" key={p.label}>
+                    <span className="swatch" style={{ background: p.color, marginTop: 0 }} />
+                    <span className="lbl">{p.label}</span>
+                    <span className="val">{fmtInt(p.value)}</span>
+                    <span className="pc">{pct(p.value / total)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="muted small" style={{ margin: '0.9rem 0 0' }}>
+                Mail that relies on SPF alone fails as soon as it is forwarded: aim for DKIM everywhere.
+              </p>
+            </>
+          )}
+        </Card>
 
-      <Section title="Alignment breakdown">
-        {total === 0 ? (
-          <div className="empty">No reports in this range — try a wider one.</div>
-        ) : (
-          <div className="card">
-            <AlignmentBar
-              parts={[
-                { label: 'DKIM and SPF aligned', value: alignment.fully_aligned, color: 'var(--ok-solid)' },
-                { label: 'DKIM only', value: alignment.dkim_only, color: 'color-mix(in srgb, var(--ok-solid) 60%, var(--surface))' },
-                { label: 'SPF only', value: alignment.spf_only, color: 'var(--warn-solid)' },
-                { label: 'Neither (fails DMARC)', value: alignment.fully_failed, color: 'var(--bad-solid)' },
-              ]}
-              total={total}
-            />
-            <p className="muted small" style={{ margin: '0.9rem 0 0' }}>
-              DMARC passes when either DKIM or SPF aligns. Mail that relies on SPF alone fails as soon as it is
-              forwarded, so DKIM alignment is the one to aim for everywhere.
-            </p>
+        <Card title="Published policy" icon="scroll" sub="As receivers saw it in the latest report">
+          <dl className="kv-list">
+            <dt>Policy (p)</dt>
+            <dd>
+              <Pill tone={policyTone(policy.policy)}>{policy.policy || 'unknown'}</Pill>
+            </dd>
+            <dt>Subdomains (sp)</dt>
+            <dd>{policy.subdomain_policy || 'inherits p'}</dd>
+            <dt>Applied to (pct)</dt>
+            <dd>{policy.pct || '100'}%</dd>
+            <dt>DKIM alignment</dt>
+            <dd>{policy.adkim === 's' ? 'strict' : 'relaxed'}</dd>
+            <dt>SPF alignment</dt>
+            <dd>{policy.aspf === 's' ? 'strict' : 'relaxed'}</dd>
+            <dt>Latest report</dt>
+            <dd>{fmtDate(policy.latest_report_end)}</dd>
+          </dl>
+          <p className="muted small" style={{ margin: '0.9rem 0 0' }}>
+            Run the DNS checks below for what is published right now.
+          </p>
+        </Card>
+      </div>
+
+      <div className="section">
+        <Card title="Mail volume & compliance" icon="activity" sub={rangeLabel(days)}>
+          <div style={{ paddingTop: '0.25rem' }}>
+            <VolumeChart data={timeseries} />
           </div>
-        )}
-      </Section>
+        </Card>
+      </div>
 
-      <Section title="Sending sources">
-        {sources.length === 0 ? (
-          <div className="empty">No sources reported in this range.</div>
-        ) : (
-          <div className="card flush">
+      <div className="section">
+        <Card
+          title="DNS health"
+          icon="dns"
+          sub={dnsCheck ? `Checked ${relTime(dnsCheck.checked_at)} against live DNS` : 'Live MX, SPF, DMARC and DKIM records'}
+          action={
+            isAdmin && (
+              <form action={runDnsCheckAction}>
+                <input type="hidden" name="domain" value={domain} />
+                <input type="hidden" name="range" value={range} />
+                <SubmitButton className="btn btn-primary btn-sm" pendingLabel="Checking DNS…">
+                  <Icon name="refresh" size={14} /> {dnsCheck ? 'Re-run checks' : 'Run checks'}
+                </SubmitButton>
+              </form>
+            )
+          }
+        >
+          {notice === 'cooldown' && <Notice tone="info">Checks ran a moment ago — showing those results. Try again in a few seconds.</Notice>}
+          {dnsCheck == null ? (
+            <EmptyState icon="dns" title="Not checked yet">
+              {isAdmin
+                ? 'Run the checks to see its live MX, SPF, DMARC and DKIM records.'
+                : 'An administrator can run them to show its live MX, SPF, DMARC and DKIM records.'}
+            </EmptyState>
+          ) : (
+            <>
+              <DnsHealth check={dnsCheck} />
+              <p className="muted small" style={{ margin: '0.9rem 0 0' }}>
+                DKIM has no discovery mechanism, so only selectors seen in this domain&apos;s reports and a few common defaults are probed.
+              </p>
+            </>
+          )}
+        </Card>
+      </div>
+
+      <div className="section">
+        <Card
+          title="Sending sources"
+          icon="server"
+          flush
+          sub={`${fmtInt(sources.length)} ${sources.length === 1 ? 'source' : 'sources'}${failingSources ? ` · ${failingSources} with failures` : ''}`}
+          action={
+            failingSources > 0 ? (
+              <Link href={`/issues?range=${range}&domain=${encodeURIComponent(domain)}`} className="btn btn-sm btn-ghost">
+                Diagnose failures <Icon name="arrowRight" size={13} />
+              </Link>
+            ) : undefined
+          }
+          foot={sources.length === 100 ? 'Showing the 100 highest-volume sources.' : undefined}
+        >
+          {sources.length === 0 ? (
+            <EmptyState icon="server">No sources reported in this range.</EmptyState>
+          ) : (
             <div className="table-wrap">
               <table>
                 <thead>
@@ -225,87 +313,63 @@ export default async function DomainPage({
                 </tbody>
               </table>
             </div>
-            {sources.length === 100 && <div className="card-foot">Showing the 100 highest-volume sources.</div>}
-          </div>
-        )}
-      </Section>
+          )}
+        </Card>
+      </div>
     </>
   )
 }
 
-function Kv({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="kv-label">{label}</div>
-      <div className="kv-value">{children}</div>
-    </div>
-  )
-}
-
-function AlignmentBar({
-  parts,
-  total,
-}: {
-  parts: Array<{ label: string; value: number; color: string }>
-  total: number
-}) {
-  return (
-    <>
-      <div className="stack" role="img" aria-label={parts.map((p) => `${p.label}: ${pct(p.value / total)}`).join(', ')}>
-        {parts
-          .filter((p) => p.value > 0)
-          .map((p) => (
-            <span key={p.label} style={{ flex: `${p.value} 0 0`, background: p.color }} title={`${p.label}: ${fmtInt(p.value)}`} />
-          ))}
-      </div>
-      <div className="legend">
-        {parts.map((p) => (
-          <div className="legend-item" key={p.label}>
-            <span className="swatch" style={{ background: p.color }} />
-            <div>
-              <div className="kv-label">{p.label}</div>
-              <div className="kv-value">
-                {fmtInt(p.value)} <span className="muted small">{pct(p.value / total)}</span>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </>
-  )
+function ALIGN_PARTS(a: { fully_aligned: number; dkim_only: number; spf_only: number; fully_failed: number }) {
+  return [
+    { label: 'DKIM and SPF aligned', value: a.fully_aligned, color: 'var(--ok-solid)' },
+    { label: 'DKIM only', value: a.dkim_only, color: 'color-mix(in srgb, var(--ok-solid) 55%, var(--surface))' },
+    { label: 'SPF only', value: a.spf_only, color: 'var(--warn-solid)' },
+    { label: 'Neither (fails)', value: a.fully_failed, color: 'var(--bad-solid)' },
+  ]
 }
 
 function StatusPill({ status }: { status: CheckStatus }) {
-  if (status === 'ok') return <Pill tone="ok">Pass</Pill>
-  if (status === 'fail') return <Pill tone="bad">Fail</Pill>
-  return <Pill tone="warn">Warning</Pill>
+  if (status === 'ok')
+    return (
+      <Pill tone="ok" dot>
+        Pass
+      </Pill>
+    )
+  if (status === 'fail')
+    return (
+      <Pill tone="bad" dot>
+        Fail
+      </Pill>
+    )
+  return (
+    <Pill tone="warn" dot>
+      Warning
+    </Pill>
+  )
 }
 
-function DnsHealthCard({ check }: { check: DnsCheckResults }) {
+function DnsHealth({ check }: { check: DnsCheckResults }) {
   const spf = check.spf_expanded
-  const rows: Array<{ name: string; status: CheckStatus; detail: React.ReactNode; notes: string[] }> = [
+  const records: Array<{ name: string; label: string; status: CheckStatus; detail: React.ReactNode; notes: string[] }> = [
     {
-      name: 'MX',
-      status: check.mx.status,
-      detail:
-        check.mx.records.length > 0 && check.mx.records.some((m) => m.exchange && m.exchange !== '.') ? (
-          <span className="mono">{check.mx.records.map((m) => `${m.priority} ${m.exchange}`).join(', ')}</span>
-        ) : (
-          <span className="muted">none</span>
-        ),
-      notes: check.mx.notes,
+      name: 'DMARC',
+      label: 'Policy record',
+      status: check.dmarc.status,
+      detail: check.dmarc.record ? <code className="record">{check.dmarc.record}</code> : <span className="muted">No record published</span>,
+      notes: check.dmarc.notes,
     },
     {
       name: 'SPF',
+      label: 'Authorized senders',
       status: check.spf.status,
       detail: (
         <>
-          {check.spf.record ? <code>{check.spf.record}</code> : <span className="muted">no record</span>}
+          {check.spf.record ? <code className="record">{check.spf.record}</code> : <span className="muted">No record published</span>}
           {spf && spf.has_spf && (
-            <details style={{ marginTop: '0.4rem' }}>
+            <details style={{ marginTop: '0.5rem' }}>
               <summary>
-                Authorizes {fmtInt(spf.networks.length)} {spf.networks.length === 1 ? 'network' : 'networks'} ·{' '}
-                {Math.min(spf.lookups, 10)}
+                Authorizes {fmtInt(spf.networks.length)} {spf.networks.length === 1 ? 'network' : 'networks'} · {Math.min(spf.lookups, 10)}
                 {spf.lookups > 10 ? '+' : ''} of 10 DNS lookups
               </summary>
               <SpfNetworks networks={spf.networks} />
@@ -321,13 +385,8 @@ function DnsHealthCard({ check }: { check: DnsCheckResults }) {
       notes: check.spf.notes,
     },
     {
-      name: 'DMARC',
-      status: check.dmarc.status,
-      detail: check.dmarc.record ? <code>{check.dmarc.record}</code> : <span className="muted">no record</span>,
-      notes: check.dmarc.notes,
-    },
-    {
       name: 'DKIM',
+      label: 'Signing keys',
       status: check.dkim.status,
       detail: (
         <span className="pill-row">
@@ -343,48 +402,56 @@ function DnsHealthCard({ check }: { check: DnsCheckResults }) {
                 {s.signing_domain ? `@${s.signing_domain}` : ''}
               </Pill>
             ))}
-          {check.dkim.selectors.every((s) => !s.found && !s.observed) && <span className="muted">no keys found</span>}
+          {check.dkim.selectors.every((s) => !s.found && !s.observed) && <span className="muted">No keys found</span>}
         </span>
       ),
       notes: check.dkim.notes,
     },
+    {
+      name: 'MX',
+      label: 'Mail servers',
+      status: check.mx.status,
+      detail:
+        check.mx.records.length > 0 && check.mx.records.some((m) => m.exchange && m.exchange !== '.') ? (
+          <div className="mono small" style={{ display: 'grid', gap: '0.15rem' }}>
+            {check.mx.records.map((m) => (
+              <span key={`${m.priority}-${m.exchange}`}>
+                <span className="muted">{m.priority}</span> {m.exchange}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span className="muted">None</span>
+        ),
+      notes: check.mx.notes,
+    },
   ]
 
   return (
-    <div className="card flush">
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: 90 }}>Record</th>
-              <th style={{ width: 100 }}>Status</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.name}>
-                <td style={{ fontWeight: 620 }}>{r.name}</td>
-                <td>
-                  <StatusPill status={r.status} />
-                </td>
-                <td className="wrap">
-                  {r.detail}
-                  {r.notes.map((n, i) => (
-                    <div key={i} className="muted small" style={{ marginTop: '0.3rem' }}>
-                      {n}
-                    </div>
-                  ))}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="card-foot">
-        Checked {relTime(check.checked_at)} against live DNS. DKIM has no discovery mechanism, so only selectors seen
-        in this domain&apos;s reports and a few common defaults are probed.
-      </div>
+    <div className="dns-grid">
+      {records.map((r) => (
+        <div className="dns-card" key={r.name}>
+          <div className="dns-card-head">
+            <span className={`row-icon ${r.status === 'ok' ? 'ok' : r.status === 'fail' ? 'bad' : 'warn'}`} style={{ width: 28, height: 28 }}>
+              <Icon name={r.status === 'ok' ? 'check' : r.status === 'fail' ? 'x' : 'alert'} size={14} />
+            </span>
+            <div>
+              <h3>{r.name}</h3>
+              <div className="muted" style={{ fontSize: '0.72rem' }}>
+                {r.label}
+              </div>
+            </div>
+            <StatusPill status={r.status} />
+          </div>
+          {r.detail}
+          {r.notes.map((n, i) => (
+            <div key={i} className="note">
+              <Icon name="info" size={13} style={{ flex: 'none', marginTop: '0.15rem' }} />
+              <span>{n}</span>
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   )
 }
@@ -398,13 +465,13 @@ function SpfNetworks({ networks }: { networks: Array<{ cidr: string; via: string
     groups.set(n.via, list)
   }
   return (
-    <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '0.4rem' }}>
+    <div style={{ display: 'grid', gap: '0.5rem', margin: '0.5rem 0' }}>
       {[...groups.entries()].map(([via, cidrs]) => (
         <div key={via}>
           <div className="small" style={{ fontWeight: 600 }}>
             {via === 'top-level' ? 'Listed directly' : via}
           </div>
-          <div className="mono muted">
+          <div className="mono muted small" style={{ overflowWrap: 'anywhere' }}>
             {cidrs.slice(0, 40).join('  ')}
             {cidrs.length > 40 ? `  … and ${cidrs.length - 40} more` : ''}
           </div>

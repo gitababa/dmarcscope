@@ -1,13 +1,12 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
+import {Card,Notice,PageHeader,Pill } from '@/components/ui'
 import { listGroups } from '@/lib/access-admin'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
 import { configStore } from '@/lib/settings'
 import { clearGroupScopeAction, setGroupScopeAction } from '../access-actions'
-import { AdminNav } from '../nav'
 import { ScopeFields } from '../scope-fields'
 import { Notices } from '../shared'
 
@@ -24,13 +23,7 @@ export default async function GroupsPage({ searchParams }: { searchParams: Promi
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Groups</h1>
-          <p>Limit people to chosen domains by group. A group is a name from your identity provider’s group claim or from SCIM.</p>
-        </div>
-      </div>
-      <AdminNav current="/admin/groups" />
+      <PageHeader title="Groups" lead="Limit people to chosen domains by group. A group is a name from your identity provider’s group claim or from SCIM." />
       <Notices error={error} done={done} />
 
       <section className="section" aria-labelledby="default-head">
@@ -43,9 +36,7 @@ export default async function GroupsPage({ searchParams }: { searchParams: Promi
             Administrators and owners always see every domain.
           </p>
           {anyLimited && fallback === 'all' && (
-            <div className="notice warn" role="note" style={{ marginTop: '0.8rem' }}>
-              <span>
-                Some groups are limited, but people in no group still see everything. If your identity provider ever stops sending groups,
+            <Notice tone="warn" role="note">Some groups are limited, but people in no group still see everything. If your identity provider ever stops sending groups,
                 everyone would see everything. Set <strong>Domains a viewer sees without a scope</strong> to “none”
                 {access.role === 'owner' ? (
                   <>
@@ -54,9 +45,7 @@ export default async function GroupsPage({ searchParams }: { searchParams: Promi
                   </>
                 ) : (
                   <> (an owner can do this in Settings).</>
-                )}
-              </span>
-            </div>
+                )}</Notice>
           )}
         </div>
       </section>

@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
 import { SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
-import { listPendingRequests, listRules } from '@/lib/admin'
+import {Card,Notice,PageHeader,Pill } from '@/components/ui'
+import { listRules } from '@/lib/admin'
 import { atLeast } from '@/lib/auth/roles'
 import { requirePageRole } from '@/lib/auth/server'
 import type { Role } from '@/lib/auth/types'
 import { envBool, envList } from '@/lib/config'
-import { AdminNav } from '../nav'
 import { addRuleAction, deleteRuleAction } from '../people-actions'
 import { Notices, RoleSelect } from '../shared'
 
@@ -34,29 +33,17 @@ function environmentRules(): Array<{ variable: string; grants: string; values: s
 export default async function AdminRulesPage({ searchParams }: { searchParams: Promise<{ error?: string; done?: string }> }) {
   const access = await requirePageRole('admin')
   const { error, done } = await searchParams
-  const [rules, pending] = await Promise.all([listRules(access), listPendingRequests(access)])
+  const rules = await listRules(access)
   const fromEnv = environmentRules()
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>
-            Access rules let people in without adding them one by one. Someone signing in gets the highest role any rule
-            gives them, re-evaluated on every request. Rules never make anyone an owner.
-          </p>
-        </div>
-      </div>
-      <AdminNav current="/admin/rules" pending={pending.length} />
+      <PageHeader title="Access rules" lead={<>Access rules let people in without adding them one by one. Someone signing in gets the highest role any rule
+            gives them, re-evaluated on every request. Rules never make anyone an owner.</>} />
       <Notices error={error} done={done} />
 
-      <div className="notice warn" role="note">
-        <span>
-          An email-domain rule is only as strong as your sign-in provider: with a shared provider such as Google, anyone
-          with an account at that domain gets in, including personal accounts registered with a work address.
-        </span>
-      </div>
+      <Notice tone="warn" role="note">An email-domain rule is only as strong as your sign-in provider: with a shared provider such as Google, anyone
+          with an account at that domain gets in, including personal accounts registered with a work address.</Notice>
 
       <section className="section" aria-labelledby="rules-head">
         <div className="section-head">

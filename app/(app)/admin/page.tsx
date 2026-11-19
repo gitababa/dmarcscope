@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
 import { SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
+import type { IconName } from '@/components/icons'
+import { Card, Notice, PageHeader, Pill } from '@/components/ui'
 import { atLeast } from '@/lib/auth/roles'
-import { listPendingRequests } from '@/lib/admin'
 import { requirePageRole } from '@/lib/auth/server'
 import { REGISTRY, type ResolvedSetting, configStore } from '@/lib/settings'
 import { updateSettingAction } from './actions'
-import { AdminNav } from './nav'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Settings' }
@@ -18,6 +17,15 @@ const ERRORS: Record<string, string> = {
   invalid: 'That value is not valid.',
 }
 
+// Settings shown together, by the first part of their key.
+const GROUPS: Array<{ title: string; icon: IconName; sub: string; prefixes: string[] }> = [
+  { title: 'General', icon: 'settings', sub: 'Name and sessions', prefixes: ['app', 'session'] },
+  { title: 'Data & retention', icon: 'inbox', sub: 'How long reports are kept and when ingest counts as stale', prefixes: ['ingest'] },
+  { title: 'Sign-in & access', icon: 'shield', sub: 'Password sign-in, single sign-on and what unscoped viewers see', prefixes: ['auth', 'access'] },
+  { title: 'Email delivery', icon: 'mail', sub: 'The SMTP server alert emails are sent through', prefixes: ['smtp'] },
+  { title: 'Alerts & automation', icon: 'bell', sub: 'Webhook safety and the token for machine endpoints', prefixes: ['alerts', 'cron'] },
+]
+
 const SOURCE_LABEL: Record<ResolvedSetting['source'], string> = {
   environment: 'managed by environment',
   database: 'set here',
@@ -27,7 +35,7 @@ const SOURCE_LABEL: Record<ResolvedSetting['source'], string> = {
 export default async function AdminSettingsPage({ searchParams }: { searchParams: Promise<{ error?: string; saved?: string; key?: string }> }) {
   const access = await requirePageRole('admin')
   const { error, saved, key } = await searchParams
-  const [settings, pending] = await Promise.all([configStore().list(), listPendingRequests(access)])
+  const settings = await configStore().list()
   const broken = settings.filter((s) => s.error)
   // What a valid value looks like, from the registry (never text from the URL).
   const requirement = (() => {
@@ -36,63 +44,70 @@ export default async function AdminSettingsPage({ searchParams }: { searchParams
     return r && !r.ok ? r.error : null
   })()
 
+  const groups = GROUPS.map((g) => ({ ...g, items: settings.filter((s) => g.prefixes.includes(s.key.split('.')[0])) }))
+  const rest = settings.filter((s) => !GROUPS.some((g) => g.prefixes.includes(s.key.split('.')[0])))
+  if (rest.length) groups.push({ title: 'Other', icon: 'settings', sub: '', prefixes: [], items: rest })
+
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>Each setting comes from its environment variable if that is set, otherwise from here, otherwise its default.</p>
-        </div>
-      </div>
-      <AdminNav current="/admin" pending={pending.length} />
+      <PageHeader
+        title="Settings"
+        lead="Each setting comes from its environment variable if that is set, otherwise from here, otherwise its default. Changes reach every instance within a few seconds."
+      />
 
       {error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {ERRORS[error] ?? 'The setting could not be saved.'}
           {key && REGISTRY_LABEL(settings, key) ? ` ${REGISTRY_LABEL(settings, key)} ${requirement ?? ''}.` : ''}
-        </div>
+        </Notice>
       )}
       {saved && !error && (
-        <div className="notice ok" role="status">
+        <Notice tone="ok" role="status">
           Saved. Every instance of the app picks the change up within a few seconds.
-        </div>
+        </Notice>
       )}
       {broken.length > 0 && (
-        <div className="notice bad" role="alert">
-          <span>
-            <strong>Invalid settings.</strong> {broken.map((s) => `${s.label} (${s.envVar}) ${s.error}`).join('; ')}. Until fixed,
-            each uses its default, or is off if it is a secret.
-          </span>
-        </div>
+        <Notice tone="bad" role="alert">
+          <strong>Invalid settings.</strong> {broken.map((s) => `${s.label} (${s.envVar}) ${s.error}`).join('; ')}. Until fixed, each uses its
+          default, or is off if it is a secret.
+        </Notice>
       )}
 
-      <div className="card flush" role="list" aria-label="Settings">
-        {settings.map((s) => (
-          <div className="setting-row" role="listitem" key={s.key}>
-            <div>
-              <div className="source-name">{s.label}</div>
-              <div className="source-meta">
-                {s.key} · {s.envVar}
-              </div>
-              <div className="muted small">{s.description}</div>
-            </div>
-            <div className="setting-value">
-              {s.type === 'secret' ? (
-                <Pill tone={s.isSet && !s.error ? 'ok' : 'muted'}>{s.isSet ? 'set' : 'not set'}</Pill>
-              ) : (
-                <code>{String(s.value ?? '')}</code>
-              )}{' '}
-              <Pill tone={s.source === 'environment' ? 'info' : 'muted'}>{SOURCE_LABEL[s.source]}</Pill>
-              {s.error && (
-                <div className="tone-bad small" role="note">
-                  invalid: {s.error}
+      {groups
+        .filter((g) => g.items.length > 0)
+        .map((g) => (
+          <Card key={g.title} title={g.title} icon={g.icon} sub={g.sub} flush className="setting-group">
+            <div role="list" aria-label={g.title}>
+              {g.items.map((s) => (
+                <div className="setting-row" role="listitem" key={s.key}>
+                  <div>
+                    <div className="source-name">{s.label}</div>
+                    <div className="muted small">{s.description}</div>
+                    <div className="source-meta" style={{ marginTop: '0.2rem' }}>
+                      {s.envVar}
+                    </div>
+                  </div>
+                  <div className="setting-value">
+                    {s.type === 'secret' ? (
+                      <Pill tone={s.isSet && !s.error ? 'ok' : 'muted'} dot>
+                        {s.isSet ? 'set' : 'not set'}
+                      </Pill>
+                    ) : (
+                      <code title={String(s.value ?? '')}>{String(s.value ?? '') || '—'}</code>
+                    )}
+                    <Pill tone={s.source === 'environment' ? 'info' : s.source === 'database' ? 'accent' : 'muted'}>{SOURCE_LABEL[s.source]}</Pill>
+                    {s.error && (
+                      <div className="tone-bad small" role="note">
+                        invalid: {s.error}
+                      </div>
+                    )}
+                  </div>
+                  <SettingForm setting={s} canEdit={!s.ownerOnly || atLeast(access.role, 'owner')} />
                 </div>
-              )}
+              ))}
             </div>
-            <SettingForm setting={s} canEdit={!s.ownerOnly || atLeast(access.role, 'owner')} />
-          </div>
+          </Card>
         ))}
-      </div>
     </>
   )
 }
@@ -102,8 +117,8 @@ function REGISTRY_LABEL(settings: ResolvedSetting[], key: string): string | null
 }
 
 function SettingForm({ setting, canEdit }: { setting: ResolvedSetting; canEdit: boolean }) {
-  if (setting.source === 'environment') return <span className="muted small">Change {setting.envVar}</span>
-  if (!canEdit) return <span className="muted small">Owner only</span>
+  if (setting.source === 'environment') return <span className="muted small" style={{ textAlign: 'right' }}>Change {setting.envVar} in the environment</span>
+  if (!canEdit) return <span className="muted small" style={{ textAlign: 'right' }}>Only the owner can change this</span>
   const id = `setting-${setting.key.replace(/\W/g, '-')}`
   if (setting.type === 'bool') {
     return (

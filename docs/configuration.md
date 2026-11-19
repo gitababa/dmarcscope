@@ -8,7 +8,7 @@ exactly as before.
 
 ## How a setting gets its value
 
-Settings that can be changed in the panel (**Admin → Settings**) resolve to exactly one value:
+Settings that can be changed in the panel (**Settings**) resolve to exactly one value:
 
 1. the environment variable, if it is set — the panel then shows the setting as
    **managed by environment** and does not let you change it there;
@@ -36,9 +36,9 @@ is fixed the setting uses its default, or, for a secret, counts as not set.
 | Allow alerts to private addresses | `ALERTS_ALLOW_PRIVATE_WEBHOOKS` | off | owner |
 | Domains a viewer sees without a scope | `ACCESS_DOMAIN_DEFAULT` (`all` or `none`) | `all` | owner |
 
-The single sign-on connection itself is configured under **Admin → Sign-in** ([sso.md](sso.md)).
-Reports mailboxes and monitored domains are configured under **Admin → Mail** and **Admin →
-Domains** ([mail.md](mail.md)). Alert rules and channels are under **Admin → Alerts** ([alerts.md](alerts.md)). Domain limits, SCIM and API tokens are under **Admin → Users / Groups / API access** ([enterprise.md](enterprise.md)).
+The single sign-on connection itself is configured under **Sign-in** ([sso.md](sso.md)).
+Reports mailboxes and monitored domains are configured under **Mailboxes** and **Monitored
+domains** ([mail.md](mail.md)). Alert rules and channels are under **Alerts** ([alerts.md](alerts.md)). Domain limits, SCIM and API tokens are under **People**, **Groups** and **API & SCIM** ([enterprise.md](enterprise.md)).
 
 ### Secrets in the database
 
@@ -109,7 +109,7 @@ node scripts/secrets-reencrypt.mjs   # npm run secrets:reencrypt: after changing
 | `IMAP_FOLDER` | `INBOX` | Folder to read. |
 | `IMAP_PROCESSED_FOLDER` | — | Move stored reports here. Default: leave them in place, marked as read. |
 | `IMAP_INVALID_FOLDER` | `DMARC-Invalid` | Where messages that are not DMARC reports are moved. |
-| `ALLOWED_DOMAINS` | — (the list under Admin → Domains) | The domains you monitor; reports about any other domain are ignored. When set it wins over the panel's list (set it on the web app too, so the panel shows it). With neither, `run` accepts reports about **any** domain and logs a warning on every run (anyone can email a report about any domain to the mailbox), while `serve` refuses to read a mailbox at all. (Unrelated to `ALLOWED_EMAIL_DOMAINS`, which is about who may sign in.) |
+| `ALLOWED_DOMAINS` | — (the list under Monitored domains) | The domains you monitor; reports about any other domain are ignored. When set it wins over the panel's list (set it on the web app too, so the panel shows it). With neither, `run` accepts reports about **any** domain and logs a warning on every run (anyone can email a report about any domain to the mailbox), while `serve` refuses to read a mailbox at all. (Unrelated to `ALLOWED_EMAIL_DOMAINS`, which is about who may sign in.) |
 | `RETENTION_DAYS` | — (the panel setting; else keep forever) | Delete reports older than this on every run. `0` means forever and wins over the panel. |
 | `INGEST_MIN_DATE` | — | Fixed cutoff (`YYYY-MM-DD`): older reports are never fetched or kept. |
 | `INGEST_MAX_MESSAGES` | `2000` | Messages processed per run. |

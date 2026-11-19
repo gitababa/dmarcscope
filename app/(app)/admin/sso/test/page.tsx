@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { FocusedSubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
+import { Pill, Notice } from '@/components/ui'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
 import { getConnection } from '@/lib/sso'
@@ -64,12 +64,10 @@ export default async function SsoTestPage({ searchParams }: { searchParams: Prom
             </span>
           </p>
           {t.error && (
-            <div className="notice bad" role="alert">
-              <span>
-                <strong>{t.error.code}</strong>: {t.error.message}
-                {HINTS[t.error.code] && <div className="small" style={{ marginTop: '0.4rem' }}>{HINTS[t.error.code]}</div>}
-              </span>
-            </div>
+            <Notice tone="bad" role="alert">
+              <strong>{t.error.code}</strong>: {t.error.message}
+              {HINTS[t.error.code] && <div className="small" style={{ marginTop: '0.4rem' }}>{HINTS[t.error.code]}</div>}
+            </Notice>
           )}
           {t.identity && (
             <dl className="kv-list">

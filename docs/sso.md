@@ -1,7 +1,7 @@
 # Single sign-on from the panel
 
 When sign-in is managed in the app (`AUTH_PROVIDER` unset), the owner connects an OpenID Connect
-provider under **Admin → Sign-in**. (With `AUTH_PROVIDER=oidc` the connection comes from the
+provider under **Sign-in**. (With `AUTH_PROVIDER=oidc` the connection comes from the
 `OIDC_*` variables instead, as described in [authentication.md](authentication.md); the panel then
 shows it read-only.)
 
@@ -26,7 +26,7 @@ connection does not end anyone's session.
 ### Who gets in
 
 A person signing in through the connection is admitted like everyone else: by their assigned role,
-an invitation, or an access rule (**Admin → Access rules**). Anyone else becomes a pending
+an invitation, or an access rule (**Access rules**). Anyone else becomes a pending
 request. The address is read from exactly one claim. With the standard `email` claim, the
 provider must state `email_verified: true`. **Required claims** (`claim=value`, comma-separated,
 `|` between alternatives) refuse a sign-in before any rule is looked at; use them to pin a shared

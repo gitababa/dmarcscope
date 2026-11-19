@@ -47,7 +47,7 @@ on another address or port, set `WEB_BIND` / `WEB_PORT` in `.env`.
 
 ### The worker in serve mode
 
-To read mailboxes set up in the browser (Admin → Mail), start the long-running worker as well.
+To read mailboxes set up in the browser (Mailboxes), start the long-running worker as well.
 It needs `APP_SECRET` in `.env`, the same one the web app uses:
 
 ```bash
@@ -216,8 +216,8 @@ Nothing in the environment has to change.
    - run `node scripts/settings-import.mjs` to copy `ADMIN_EMAILS`, `ALLOWED_EMAILS`,
      `ALLOWED_EMAIL_DOMAINS`, `ADMIN_GROUPS` and `ALLOWED_GROUPS` into the database, after which
      those variables can be removed;
-   - move the mailbox into the panel: add the domains from `ALLOWED_DOMAINS` under Admin →
-     Domains, add the mailbox under Admin → Mail, run `python -m ingestor serve` instead of the
+   - move the mailbox into the panel: add the domains from `ALLOWED_DOMAINS` under Monitored
+     domains, add the mailbox under Mailboxes, run `python -m ingestor serve` instead of the
      scheduled `run`, then remove `ALLOWED_DOMAINS` and `IMAP_*` ([mail.md](mail.md)). The
      scheduled `run` keeps working unchanged if you leave it.
 
@@ -228,4 +228,4 @@ Rolling back to 1.1.x after step 3 works: 1.1.x ignores the new tables.
 Set `DATABASE_URL`, `APP_URL` and `APP_SECRET`, run the migrations and start the web app. Its log
 prints a one-time setup token; open `/setup` and create the owner account. Then start the worker
 with `python -m ingestor serve` (same `DATABASE_URL` and `APP_SECRET`), add your domains under
-Admin → Domains and your reports mailbox under Admin → Mail.
+Monitored domains and your reports mailbox under Mailboxes.

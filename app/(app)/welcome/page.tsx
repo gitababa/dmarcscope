@@ -18,8 +18,9 @@ export default async function WelcomePage() {
   if (!saved || saved.userId !== session.userId) redirect('/admin')
 
   return (
-    <div className="card" style={{ maxWidth: 560, margin: '0 auto' }}>
-      <h1 style={{ marginTop: 0, fontSize: '1.3rem' }}>Save your recovery codes</h1>
+    <div className="card" style={{ maxWidth: 560, margin: '2rem auto 0', padding: '1.75rem' }}>
+      <div className="eyebrow">Last step</div>
+      <h1 style={{ marginTop: 0, fontSize: '1.4rem' }}>Save your recovery codes</h1>
       <p className="muted">
         The owner account is ready and you are signed in. If you lose your authenticator app, each of these codes
         signs you in once instead of a code from the app. Store them somewhere safe, such as a password manager.{' '}

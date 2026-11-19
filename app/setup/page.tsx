@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { cookies } from 'next/headers'
 import { notFound } from 'next/navigation'
-import { Logo } from '@/components/ui'
+import { BrandMark, Notice } from '@/components/ui'
 import { authProvider } from '@/lib/auth'
 import { PASSWORD_MIN } from '@/lib/auth/password-policy'
 import { purposeCookieName } from '@/lib/auth/session'
@@ -61,19 +61,19 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
   return (
     <main className="auth-wrap">
       <div className="card auth-card wide">
-        <Logo size={40} />
+        <BrandMark size={24} />
         <h1>Set up {appName}</h1>
-        <div className="steps" aria-label="Setup progress">
+        <div className="wizard-steps" aria-label="Setup progress">
           {STEPS.map((s, i) => (
-            <span key={s} aria-current={i === current ? 'step' : undefined}>
+            <span key={s} className={i < current ? 'done' : undefined} aria-current={i === current ? 'step' : undefined}>
               {i + 1}. {s}
             </span>
           ))}
         </div>
         {message && (
-          <div className="notice bad" role="alert">
+          <Notice tone="bad" role="alert">
             {message}
-          </div>
+          </Notice>
         )}
 
         {current === 0 && !noSecret && (

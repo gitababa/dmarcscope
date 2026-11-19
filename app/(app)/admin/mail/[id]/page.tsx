@@ -2,14 +2,13 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { AutoRefresh, FocusedSubmitButton, SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
-import { listPendingRequests } from '@/lib/admin'
+import { Icon } from '@/components/icons'
+import { Card, Notice, PageHeader, Pill } from '@/components/ui'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
 import { fmtDate, relTime, untilTime } from '@/lib/format'
 import { KINDS, type JobRow, type RunRow, getMailbox, isKind, listJobs, listRuns, shortError, workerStatus } from '@/lib/mail'
 import { deleteMailboxAction, requestRunAction, requestTestAction, toggleMailboxAction } from '../../mail-actions'
-import { AdminNav } from '../../nav'
 import { MAIL_ERRORS, MAIL_FIELDS, MailboxForm, WorkerNotice, runState } from '../form'
 
 export const dynamic = 'force-dynamic'
@@ -73,7 +72,7 @@ function RunLine({ r }: { r: RunRow }) {
         )}
       </div>
       <div className="person-tags">
-        {running ? <Pill tone="info">running</Pill> : r.failed ? <Pill tone="bad">failed</Pill> : <Pill tone="ok">ok</Pill>}
+        {running ? <Pill tone="info" dot>running</Pill> : r.failed ? <Pill tone="bad" dot>failed</Pill> : <Pill tone="ok" dot>ok</Pill>}
       </div>
     </div>
   )
@@ -92,7 +91,7 @@ export default async function MailboxPage({
   if (!/^\d{1,15}$/.test(rawId)) notFound()
   const id = Number(rawId)
   const db = getPool()
-  const [pending, mailbox, worker] = await Promise.all([listPendingRequests(access), getMailbox(db, id), workerStatus(db)])
+  const [mailbox, worker] = await Promise.all([getMailbox(db, id), workerStatus(db)])
   if (!mailbox) notFound()
   const [runs, jobs] = await Promise.all([listRuns(db, id, 30), listJobs(db, id, 6)])
   const waiting = jobs.some((j) => j.status === 'queued' || j.status === 'running') || runs.some((r) => !r.finished_at)
@@ -102,34 +101,56 @@ export default async function MailboxPage({
   return (
     <>
       <AutoRefresh active={waiting} />
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>
-            <Link href="/admin/mail">Mail</Link> › {mailbox.name}
-          </p>
-        </div>
-      </div>
-      <AdminNav current="/admin/mail" pending={pending.length} />
+      <PageHeader
+        crumbs={[{ href: '/admin/mail', label: 'Mailboxes' }, { label: mailbox.name }]}
+        title={mailbox.name}
+        badge={
+          <Pill tone={s.tone} dot>
+            {s.label}
+          </Pill>
+        }
+        lead={
+          <>
+            {mailbox.username} · {KINDS[mailbox.kind].label}
+          </>
+        }
+        actions={
+          <>
+            <form action={requestTestAction}>
+              <input type="hidden" name="id" value={mailbox.id} />
+              <SubmitButton className="btn btn-sm" pendingLabel="Asking…">
+                <Icon name="zap" size={14} /> Test connection
+              </SubmitButton>
+            </form>
+            <form action={requestRunAction}>
+              <input type="hidden" name="id" value={mailbox.id} />
+              <SubmitButton className="btn btn-sm btn-primary" pendingLabel="Asking…">
+                <Icon name="refresh" size={14} /> Run now
+              </SubmitButton>
+            </form>
+          </>
+        }
+      />
 
       {error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {MAIL_ERRORS[error] ?? 'That could not be done.'}
           {error === 'invalid' && field && MAIL_FIELDS[field] ? ` Check: ${MAIL_FIELDS[field]}.` : ''}
-        </div>
+        </Notice>
       )}
       {done && !error && DONE[done] && (
-        <div className="notice ok" role="status">
+        <Notice tone="ok" role="status">
           {DONE[done]}
-        </div>
+        </Notice>
       )}
 
       <section className="section" aria-labelledby="state-head">
-        <div className="section-head">
-          <h2 id="state-head">{mailbox.name}</h2>
-          <Pill tone={s.tone}>{s.label}</Pill>
-        </div>
         <div className="card">
+          <div className="card-head">
+            <h2 id="state-head">
+              <Icon name="inbox" size={16} /> Connection
+            </h2>
+          </div>
           <dl className="kv-list">
             <dt>Mailbox</dt>
             <dd>{mailbox.username}</dd>
@@ -154,18 +175,6 @@ export default async function MailboxPage({
           </dl>
           <WorkerNotice alive={worker.alive} lastSeen={worker.lastSeen} />
           <div className="inline-form" style={{ marginTop: '0.8rem' }}>
-            <form action={requestTestAction}>
-              <input type="hidden" name="id" value={mailbox.id} />
-              <SubmitButton className="btn btn-sm" pendingLabel="Asking…">
-                Test connection
-              </SubmitButton>
-            </form>
-            <form action={requestRunAction}>
-              <input type="hidden" name="id" value={mailbox.id} />
-              <SubmitButton className="btn btn-sm btn-primary" pendingLabel="Asking…">
-                Run now
-              </SubmitButton>
-            </form>
             <form action={toggleMailboxAction}>
               <input type="hidden" name="id" value={mailbox.id} />
               <input type="hidden" name="enabled" value={mailbox.enabled ? '0' : '1'} />
@@ -221,26 +230,26 @@ export default async function MailboxPage({
             )}
           </nav>
           {formKind !== mailbox.kind && (
-            <div className="notice warn" role="note">
-              <span>Changing the kind needs a new secret: the saved one belongs to the current kind.</span>
-            </div>
+            <Notice tone="warn" role="note">Changing the kind needs a new secret: the saved one belongs to the current kind.</Notice>
           )}
           <MailboxForm kind={formKind} mailbox={mailbox} />
         </div>
       </section>
 
       <section className="section" aria-labelledby="delete-head">
-        <div className="section-head">
-          <h2 id="delete-head">Delete</h2>
-        </div>
-        <div className="card">
+        <div className="card danger-zone">
+          <div className="card-head">
+            <h2 id="delete-head">
+              <Icon name="trash" size={16} /> Delete this mailbox
+            </h2>
+          </div>
           {confirm === 'delete' ? (
             <form action={deleteMailboxAction} className="notice bad confirm" role="alert">
               <input type="hidden" name="id" value={mailbox.id} />
               <input type="hidden" name="confirm" value="yes" />
               <span>Delete this mailbox and its saved secret? Reports already read stay.</span>
               <span className="inline-form">
-                <FocusedSubmitButton className="btn btn-sm">Yes, delete</FocusedSubmitButton>
+                <FocusedSubmitButton className="btn btn-sm btn-danger">Yes, delete</FocusedSubmitButton>
                 <a href={`/admin/mail/${mailbox.id}`} className="small">
                   Cancel
                 </a>
@@ -249,7 +258,7 @@ export default async function MailboxPage({
           ) : (
             <form action={deleteMailboxAction}>
               <input type="hidden" name="id" value={mailbox.id} />
-              <SubmitButton className="btn btn-sm">Delete…</SubmitButton>
+              <SubmitButton className="btn btn-sm btn-danger-ghost">Delete…</SubmitButton>
             </form>
           )}
         </div>

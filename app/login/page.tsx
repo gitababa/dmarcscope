@@ -1,8 +1,9 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { Icon } from '@/components/icons'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { Logo } from '@/components/ui'
+import { BrandMark, Notice } from '@/components/ui'
 import { authProvider, hasSignInPage } from '@/lib/auth'
 import { unsealMfaState } from '@/lib/auth/mfa-state'
 import { getAuth } from '@/lib/auth/server'
@@ -63,19 +64,19 @@ export default async function LoginPage({
   return (
     <main className="auth-wrap">
       <div className="card auth-card">
-        <Logo size={40} />
+        <BrandMark size={24} />
         <h1>{appName}</h1>
-        <p>DMARC, SPF and DKIM monitoring for your sending domains.</p>
+        <p>Sign in to monitor DMARC, SPF and DKIM for your sending domains.</p>
         {error && (
-          <div className="notice bad" role="alert">
+          <Notice tone="bad" role="alert">
             {ERRORS[error] ?? ERRORS.failed}
-          </div>
+          </Notice>
         )}
-        {signedOut && !error && <div className="notice ok">You have been signed out.</div>}
+        {signedOut && !error && <Notice tone="ok">You have been signed out.</Notice>}
         {passwordForm && step === 'code' && !mfa && !error && (
-          <div className="notice warn" role="status">
+          <Notice tone="warn" role="status">
             That sign-in attempt expired. Enter your email address and password again.
-          </div>
+          </Notice>
         )}
 
         {!passwordForm && (
@@ -128,6 +129,9 @@ export default async function LoginPage({
             <Link href={returnTo === '/' ? '/login' : `/login?returnTo=${encodeURIComponent(returnTo)}`}>Back to single sign-on</Link>
           </div>
         )}
+        <div className="auth-foot">
+          <Icon name="lock" size={12} /> Read-only monitoring: it never sends, blocks or changes mail.
+        </div>
       </div>
     </main>
   )

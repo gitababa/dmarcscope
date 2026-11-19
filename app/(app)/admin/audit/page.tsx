@@ -1,8 +1,8 @@
 import type { Metadata } from 'next'
+import { Card, Notice, PageHeader } from '@/components/ui'
 import Link from 'next/link'
-import { AUDIT_PAGE, auditActions, listAudit, listPendingRequests, parseAuditFilters } from '@/lib/admin'
+import { AUDIT_PAGE, auditActions, listAudit, parseAuditFilters } from '@/lib/admin'
 import { requirePageRole } from '@/lib/auth/server'
-import { AdminNav } from '../nav'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Audit log' }
@@ -22,10 +22,9 @@ export default async function AdminAuditPage({ searchParams }: { searchParams: P
   const access = await requirePageRole('admin')
   const params = await searchParams
   const filters = parseAuditFilters(params)
-  const [rows, actions, pending] = await Promise.all([
+  const [rows, actions] = await Promise.all([
     listAudit(access, filters, Number.parseInt(params.before || '', 10) || undefined),
     auditActions(access),
-    listPendingRequests(access),
   ])
   const last = rows[rows.length - 1]
   const query = new URLSearchParams()
@@ -39,13 +38,7 @@ export default async function AdminAuditPage({ searchParams }: { searchParams: P
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>Sign-ins, refusals, setting changes, user changes and setup steps, newest first. Entries cannot be changed or deleted.</p>
-        </div>
-      </div>
-      <AdminNav current="/admin/audit" pending={pending.length} />
+      <PageHeader title="Audit log" lead="Sign-ins, refusals, setting changes, user changes and setup steps, newest first. Entries cannot be changed or deleted." />
 
       <form method="get" action="/admin/audit" className="filters" aria-label="Filter the audit log">
         <label htmlFor="a-action" className="visually-hidden">

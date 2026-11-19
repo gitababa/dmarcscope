@@ -9,10 +9,11 @@ export default function Error({
 }) {
   return (
     <main className="auth-wrap">
-      <div className="card" style={{ maxWidth: 560 }}>
-        <h1 className="tone-bad" style={{ marginTop: 0, fontSize: '1.2rem' }}>
-          Something went wrong
-        </h1>
+      <div className="card auth-card wide">
+        <span className="row-icon bad" style={{ width: 44, height: 44, borderRadius: 12 }}>
+          !
+        </span>
+        <h1>Something went wrong</h1>
         <p className="muted">
           The page could not be loaded. The most common causes are an unreachable database, a schema that has not been
           migrated yet (<code>npm run db:migrate</code>), or missing configuration. The server logs have the details.
@@ -22,7 +23,7 @@ export default function Error({
             Reference for the server logs: <code>{error.digest}</code>
           </p>
         )}
-        <button onClick={() => reset()} className="btn">
+        <button onClick={() => reset()} className="btn btn-primary">
           Try again
         </button>
       </div>

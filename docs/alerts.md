@@ -1,7 +1,7 @@
 # Alerts
 
-DMARCscope can tell you when something needs attention. Set it up under **Admin → Alerts**; the
-mail server it sends email through (SMTP) is under **Admin → Settings** and is the owner's to
+DMARCscope can tell you when something needs attention. Set it up under **Alerts**; the
+mail server it sends email through (SMTP) is under **Settings** and is the owner's to
 change. Nothing is sent, and no outbound connection is made, until you add a rule and a channel.
 
 ## How it works

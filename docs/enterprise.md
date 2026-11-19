@@ -13,7 +13,7 @@ administrator lifts the limit.
 
 A viewer's domains are worked out on every request, in this order:
 
-1. Their **own setting** (Admin → Users → the person → *Domain access*) wins: *every domain*, or
+1. Their **own setting** (People → the person → *Domain access*) wins: *every domain*, or
    *only these* (their domains plus those of the limited groups they are in).
 2. With no setting of their own: a group set to *every domain* gives everything, otherwise the
    limited groups' domains are combined.
@@ -24,9 +24,9 @@ A limited setting with no domains lets the person see **nothing**, never everyth
 may be listed before its first report arrives.
 
 **Choose `none` once you limit groups.** A group is a name in your identity provider's group claim
-(the claim you configured under Admin → Sign-in) or a SCIM group. If the identity provider ever
+(the claim you configured under Sign-in) or a SCIM group. If the identity provider ever
 stops sending groups, a viewer then belongs to no group and, with the default `all`, would see
-everything. With `none` they see nothing until it is fixed. **Admin → Groups** says so while it
+everything. With `none` they see nothing until it is fixed. **Groups** says so while it
 applies.
 
 What a limited person sees: only their domains on Overview, Issues, each domain page, the CSV
@@ -39,7 +39,7 @@ Changes apply on the person's next request on every instance.
 ## SCIM provisioning
 
 Point your identity provider's SCIM client at `https://<your app>/scim/v2` with a bearer token from
-**Admin → API access** (owners only; creating a new one ends the old). Supported: `Users` and
+**API & SCIM** (owners only; creating a new one ends the old). Supported: `Users` and
 `Groups` (list with `filter` `userName eq`, `externalId eq`, `displayName eq`; get; create; replace;
 patch; delete), `ServiceProviderConfig`, `ResourceTypes`, `Schemas`.
 
@@ -65,7 +65,7 @@ client. Entra's quirks (boolean strings such as `"False"`, patch paths such as
 
 ## API tokens
 
-**Admin → API access → New API token.** A token has a name, scopes, domains and an expiry (1 to 365
+**API & SCIM → New API token.** A token has a name, scopes, domains and an expiry (1 to 365
 days, default 90). It is shown **once**; only its SHA-256 is stored.
 
 | Scope | Allows |
@@ -95,4 +95,4 @@ Issues page, limited to the domains they may see.
 ## Upgrading
 
 Run the migrations (`0008`). Nothing is limited, no token or SCIM user exists, and the new screens
-(Admin → Groups, Admin → API access) are empty.
+(Groups, API & SCIM) are empty.
