@@ -12,6 +12,8 @@ const ERRORS: Record<string, string> = {
   exists: 'Someone with that address is already known. Find them in the list below.',
   invalid: 'That value is not valid. Check the address, domain or group name.',
   duplicate: 'That rule exists already.',
+  not_applicable: 'Administrators and owners always see every domain, so a domain limit does not apply to them. Change the role first if that is what you want.',
+  limit: 'There are too many active tokens. Revoke one first.',
 }
 
 const DONE: Record<string, string> = {
@@ -25,6 +27,9 @@ const DONE: Record<string, string> = {
   removed: 'Removed. Their history stays in the audit log.',
   added: 'Rule added. It applies within a few seconds on every instance.',
   deleted: 'Rule deleted. It stops applying within a few seconds on every instance.',
+  scope_saved: 'Domain access saved. It applies on the person’s next request.',
+  scope_cleared: 'The domain limit was removed. The groups and the default decide again.',
+  revoked: 'Token revoked. It stops working at once.',
 }
 
 export function Notices({ error, done }: { error?: string; done?: string }) {

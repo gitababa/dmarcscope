@@ -824,9 +824,10 @@ scopes and expiry, a read-only JSON API, CSV export.
 4. **SCIM cannot grant roles.** SCIM-provisioned users are `viewer`. `admin` comes from the
    panel or from an access rule on a group, as today; `owner` is never reachable from SCIM
    and SCIM requests that touch an owner are refused.
-5. **API tokens are read-only and never wider than their creator.** The effective scope of
-   a request is the token's own scope intersected with its creator's *current* scope; a
-   disabled, removed or demoted-to-nothing creator makes the token fail at once.
+5. **API tokens are read-only and never wider than their creator.** A token's scope is its
+   own; its creator must still be an active administrator or owner when it is used, so a
+   disabled, removed or demoted creator makes the token fail at once (built this way because a
+   demoted viewer's scope can depend on group claims that exist only in their browser session).
 6. **No new dependency.** Token hashing, SCIM filters and CSV are written on `node:crypto`
    and the code already in the repository.
 
@@ -840,12 +841,13 @@ scopes and expiry, a read-only JSON API, CSV export.
   (`scope_id`, `domain`).
 - `groups` — `id`, `display_name` (unique, lower-case compare), `external_id`, `source`
   (`scim` | `local`), `created_at`; `group_members` — (`group_id`, `user_id`) primary key,
-  both cascade. A SCIM group named *X* counts as membership of group *X* for access rules
-  and domain scopes, in addition to the groups in the identity provider's claim.
+  both cascade. A SCIM group named *X* counts as membership of group *X* for **domain scopes
+  only**, in addition to the groups in the identity provider's claim. It never feeds access
+  rules: a group named like an administrators group must not grant a role.
 - `api_tokens` — `id`, `kind` (`api` | `scim`), `name`, `prefix` (first 8 characters, for
   display), `token_hash` (SHA-256 of the whole token, unique), `scopes` (`text[]`),
-  `domain_scope_id` (nullable → `domain_scopes`, the token's own limit; null on a `scim`
-  token), `created_by` (user id), `created_at`, `expires_at` (required), `last_used_at`,
+  `domain_mode` and `domains` (the token's own limit; `limited` with none sees nothing),
+  `created_by` (user id), `created_at`, `expires_at` (required), `last_used_at`,
   `revoked_at`.
 - `users`: add `external_id TEXT` (SCIM `externalId`), unique where not null.
 - Settings: `access.domain_default`.
@@ -878,7 +880,7 @@ same path as disabling a user.
 
 `GET /api/v1/domains`, `/domains/{domain}/summary`, `/domains/{domain}/sources`,
 `/domains/{domain}/timeseries`, `/problems`, `/domains/{domain}/dns`, each with `?days=`
-(1–90) and `.csv` variants. Scopes: `domains:read` (list, summary, timeseries),
+(1–90) and `?format=csv` for the list endpoints. Scopes: `domains:read` (list, summary, timeseries),
 `reports:read` (sources, problems), `dns:read`. Every handler gets its `DomainScope` from
 `authorize`-for-tokens and passes it to `lib/queries.ts`; there is no second code path to
 the data. Errors are JSON with a stable `code`; an unknown, expired, revoked or

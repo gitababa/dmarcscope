@@ -1,9 +1,13 @@
 // Every exported query takes a DomainScope as its first argument. A page gets
-// one only from the authorization function (lib/auth/access.ts); machine
-// endpoints from machineScope(). Today the scope is always "all domains";
-// milestone 6 filters by it.
+// one only from the authorization function (lib/auth/access.ts), the API from
+// the token's resolved scope, and machine endpoints from machineScope().
+// Every query filters by it: `only` is the allowed lower-cased domain names or
+// null for all, and each statement carries the same predicate on the domain
+// row. tests/integration/queries.test.ts calls every export with a limited
+// scope and fails if one returns another domain's data, or if an export has
+// no case there.
 
-import { type DomainScope, assertScope } from './auth/access'
+import { type DomainScope, assertScope, scopeNames } from './auth/access'
 import { sql } from './db'
 import { getIngestStaleHours } from './settings'
 
@@ -100,6 +104,7 @@ const num = (v: string | number | null | undefined) => (v == null ? 0 : Number(v
 
 export async function getDomainSummaries(scope: DomainScope, days = 7): Promise<DomainSummary[]> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -119,6 +124,7 @@ export async function getDomainSummaries(scope: DomainScope, days = 7): Promise<
       ORDER BY end_date DESC
       LIMIT 1
     ) lp ON true
+    WHERE (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
     GROUP BY d.id, d.name, lp.policy
     ORDER BY total_messages DESC, d.name ASC
   `) as Array<Record<string, string | number | null>>
@@ -142,6 +148,7 @@ export async function getDomainSummaries(scope: DomainScope, days = 7): Promise<
 
 export async function getTopSources(scope: DomainScope, days = 7, limit = 10): Promise<TopSource[]> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -157,8 +164,10 @@ export async function getTopSources(scope: DomainScope, days = 7, limit = 10): P
       SUM(CASE WHEN r.dkim_aligned THEN r.message_count ELSE 0 END)::bigint AS dkim_passed,
       SUM(CASE WHEN r.spf_aligned THEN r.message_count ELSE 0 END)::bigint AS spf_passed
     FROM records r
+    JOIN domains d ON d.id = r.domain_id
     LEFT JOIN ip_metadata m ON m.ip = r.source_ip
     WHERE r.period_end >= ${since}::timestamptz
+      AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
     GROUP BY r.source_ip, m.reverse_dns, m.base_domain, m.provider_name, m.as_name, m.as_domain
     ORDER BY total_messages DESC
     LIMIT ${limit}
@@ -169,6 +178,9 @@ export async function getTopSources(scope: DomainScope, days = 7, limit = 10): P
 
 export async function getRecentIngestRuns(scope: DomainScope, limit = 5): Promise<RecentRun[]> {
   assertScope(scope)
+  // Runs are about the deployment's mailboxes, not about a domain, and their
+  // counts would show the volume of domains a limited person cannot see.
+  if (scopeNames(scope) !== null) return []
   const rows = (await sql`
     SELECT id::int AS id, started_at, finished_at, messages_fetched, reports_parsed, reports_skipped,
            (errors IS NOT NULL AND jsonb_typeof(errors) = 'array' AND jsonb_array_length(errors) > 0) AS had_errors,
@@ -228,12 +240,15 @@ export async function getIngestHealth(scope: DomainScope): Promise<IngestHealth>
 // Scans the whole records table: call it only when its answer will be shown.
 export async function getDataExtent(scope: DomainScope): Promise<DataExtent> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const rows = (await sql`
     SELECT
-      MIN(period_start) AS min_date,
-      MAX(period_end) AS max_date,
-      COALESCE(SUM(message_count), 0)::bigint AS total_messages
-    FROM records
+      MIN(r.period_start) AS min_date,
+      MAX(r.period_end) AS max_date,
+      COALESCE(SUM(r.message_count), 0)::bigint AS total_messages
+    FROM records r
+    JOIN domains d ON d.id = r.domain_id
+    WHERE (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
   `) as Array<Record<string, string | number | null>>
 
   const r = rows[0] ?? {}
@@ -249,6 +264,7 @@ export async function getDataExtent(scope: DomainScope): Promise<DataExtent> {
 // in the same bar whatever time zone the database session uses.
 export async function getVolumeTimeseries(scope: DomainScope, days = 7, domain?: string): Promise<TimeseriesPoint[]> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const since = cutoff(days)
   const rows = domain
     ? ((await sql`
@@ -260,6 +276,7 @@ export async function getVolumeTimeseries(scope: DomainScope, days = 7, domain?:
         JOIN domains d ON d.id = r.domain_id
         WHERE r.period_end >= ${since}::timestamptz
           AND LOWER(d.name) = LOWER(${domain})
+          AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
         GROUP BY 1
         ORDER BY 1
       `) as Array<Record<string, string | number>>)
@@ -269,7 +286,9 @@ export async function getVolumeTimeseries(scope: DomainScope, days = 7, domain?:
           SUM(r.message_count)::bigint AS total,
           SUM(CASE WHEN r.dmarc_aligned THEN r.message_count ELSE 0 END)::bigint AS passed
         FROM records r
+        JOIN domains d ON d.id = r.domain_id
         WHERE r.period_end >= ${since}::timestamptz
+          AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
         GROUP BY 1
         ORDER BY 1
       `) as Array<Record<string, string | number>>)
@@ -283,7 +302,8 @@ export async function getVolumeTimeseries(scope: DomainScope, days = 7, domain?:
 
 export async function getDomainNames(scope: DomainScope): Promise<string[]> {
   assertScope(scope)
-  const rows = await sql<{ name: string }>`SELECT name FROM domains ORDER BY name`
+  const only = scopeNames(scope)
+  const rows = await sql<{ name: string }>`SELECT d.name AS name FROM domains d WHERE (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[])) ORDER BY d.name`
   return rows.map((r) => r.name)
 }
 
@@ -291,6 +311,7 @@ export async function getDomainNames(scope: DomainScope): Promise<string[]> {
 
 export async function getDomainPolicy(scope: DomainScope, domain: string): Promise<DomainPolicy | null> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const rows = (await sql`
     SELECT
       d.name AS domain,
@@ -308,6 +329,7 @@ export async function getDomainPolicy(scope: DomainScope, domain: string): Promi
       LIMIT 1
     ) r ON true
     WHERE LOWER(d.name) = LOWER(${domain})
+      AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
     LIMIT 1
   `) as Array<Record<string, string | null>>
 
@@ -331,6 +353,7 @@ export async function getSourcesForDomain(
   limit = 100
 ): Promise<DomainSourceRow[]> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -351,6 +374,7 @@ export async function getSourcesForDomain(
     JOIN domains d ON d.id = r.domain_id
     LEFT JOIN ip_metadata m ON m.ip = r.source_ip
     WHERE LOWER(d.name) = LOWER(${domain})
+      AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
       AND r.period_end >= ${since}::timestamptz
     GROUP BY r.source_ip, m.reverse_dns, m.base_domain, m.provider_name, m.as_name, m.as_domain
     ORDER BY total_messages DESC
@@ -366,6 +390,7 @@ export async function getSourcesForDomain(
 
 export async function getAlignmentBreakdown(scope: DomainScope, domain: string, days = 7): Promise<AlignmentBreakdown> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const since = cutoff(days)
   const rows = (await sql`
     SELECT
@@ -377,6 +402,7 @@ export async function getAlignmentBreakdown(scope: DomainScope, domain: string, 
     FROM records r
     JOIN domains d ON d.id = r.domain_id
     WHERE LOWER(d.name) = LOWER(${domain})
+      AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
       AND r.period_end >= ${since}::timestamptz
   `) as Array<Record<string, string | number>>
 
@@ -400,6 +426,7 @@ export type DkimSigner = { selector: string; signing_domain: string }
 // own DNS. Alignment here is relaxed: exact match or subdomain either way.
 export async function getObservedDkimSigners(scope: DomainScope, domain: string): Promise<DkimSigner[]> {
   assertScope(scope)
+  const only = scopeNames(scope)
   // Only the last 30 days: many providers rotate DKIM selectors and delete
   // old keys from DNS, so historical selectors produce false "missing" noise.
   // 'none' is parsedmarc's placeholder when a report omits the selector.
@@ -412,6 +439,7 @@ export async function getObservedDkimSigners(scope: DomainScope, domain: string)
     JOIN domains d ON d.id = r.domain_id,
     LATERAL jsonb_array_elements(r.dkim_results) elem
     WHERE LOWER(d.name) = LOWER(${domain})
+      AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
       AND elem->>'selector' IS NOT NULL
       AND elem->>'selector' NOT IN ('none', '')
       AND elem->>'domain' IS NOT NULL
@@ -434,11 +462,13 @@ export async function getObservedDkimSigners(scope: DomainScope, domain: string)
 
 export async function getLatestDnsCheck(scope: DomainScope, domain: string): Promise<Record<string, unknown> | null> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const rows = (await sql`
     SELECT c.results
     FROM dns_checks c
     JOIN domains d ON d.id = c.domain_id
     WHERE LOWER(d.name) = LOWER(${domain})
+      AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
     ORDER BY c.checked_at DESC
     LIMIT 1
   `) as Array<{ results: Record<string, unknown> }>
@@ -477,6 +507,7 @@ export type ProblemSource = {
 
 export async function getProblemSources(scope: DomainScope, days = 7, limit = 50, domain?: string): Promise<ProblemSource[]> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const since = cutoff(days)
   const onlyDomain = domain ? domain.toLowerCase() : null
   const rows = (await sql`
@@ -503,6 +534,7 @@ export async function getProblemSources(scope: DomainScope, days = 7, limit = 50
     LEFT JOIN ip_metadata m ON m.ip = r.source_ip
     WHERE r.period_end >= ${since}::timestamptz
       AND (${onlyDomain}::text IS NULL OR d.name = ${onlyDomain}::text)
+      AND (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
     GROUP BY r.source_ip, d.name, m.reverse_dns, m.base_domain, m.provider_name, m.as_name, m.as_domain
     HAVING SUM(CASE WHEN NOT r.dmarc_aligned THEN r.message_count ELSE 0 END) > 0
     ORDER BY failing DESC
@@ -537,10 +569,12 @@ export async function getProblemSources(scope: DomainScope, days = 7, limit = 50
 // attribution across every domain that has problem sources.
 export async function getLatestDnsChecksByDomain(scope: DomainScope): Promise<Map<string, Record<string, unknown>>> {
   assertScope(scope)
+  const only = scopeNames(scope)
   const rows = (await sql`
     SELECT DISTINCT ON (c.domain_id) d.name AS domain, c.results
     FROM dns_checks c
     JOIN domains d ON d.id = c.domain_id
+    WHERE (${only}::text[] IS NULL OR LOWER(d.name) = ANY(${only}::text[]))
     ORDER BY c.domain_id, c.checked_at DESC
   `) as Array<{ domain: string; results: Record<string, unknown> }>
   return new Map(rows.map((r) => [r.domain.toLowerCase(), r.results]))

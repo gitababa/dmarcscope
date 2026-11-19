@@ -30,7 +30,7 @@ export type UserRow = {
 
 export interface Directory {
   // Cached (see lib/settings/store.ts).
-  config(): Promise<{ rules: readonly AccessRule[]; ownerExists: boolean }>
+  config(): Promise<{ rules: readonly AccessRule[]; ownerExists: boolean; scopeGroups?: readonly string[] }>
   // One indexed query each; never cached, so a removal, a role change or a
   // revocation applies on the person's next request.
   findById(id: number): Promise<UserRow | null>
@@ -61,7 +61,7 @@ export class PgDirectory implements Directory {
     // "No owner yet" is only ever true before setup, and acting on a stale
     // copy would send the new owner back to /setup: confirm it every time.
     if (!snap.ownerExists) snap = await configStore().snapshot({ fresh: true })
-    return { rules: snap.rules, ownerExists: snap.ownerExists }
+    return { rules: snap.rules, ownerExists: snap.ownerExists, scopeGroups: snap.scopeGroups }
   }
 
   async findById(id: number) {

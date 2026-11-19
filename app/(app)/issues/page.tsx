@@ -46,6 +46,9 @@ export default async function IssuesPage({
         </div>
         <RangeSwitcher basePath="/issues" active={days} params={{ domain }} />
       </div>
+      <p className="small" style={{ margin: '0 0 0.8rem' }}>
+        <a href={`/issues/export?range=${rangeParam(days)}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`}>Download as CSV</a>
+      </p>
 
       {domainNames.length > 1 && (
         <form method="get" action="/issues" className="inline-form" style={{ marginBottom: '1rem' }}>

@@ -84,6 +84,10 @@ export default async function DomainPage({
         </div>
         <RangeSwitcher basePath={path} active={days} />
       </div>
+      <p className="small" style={{ margin: '0 0 0.8rem' }}>
+        Download as CSV:{' '}
+        <a href={`${path}/export?range=${range}&dataset=sources`}>sources</a> · <a href={`${path}/export?range=${range}&dataset=timeseries`}>volume per day</a>
+      </p>
 
       <div className={`notice ${advice.tone === 'info' ? '' : advice.tone}`}>
         <span>

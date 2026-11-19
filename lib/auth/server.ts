@@ -23,11 +23,17 @@ function redirectAway(auth: AuthResult): never {
   redirect('/denied')
 }
 
+// The caller's access (role and visible domains), worked out once per request.
+const accessFor = cache(async (): Promise<Access | null> => {
+  const auth = await getAuth()
+  return auth.status === 'ok' ? authorize(auth.session) : null
+})
+
 // For pages: the caller's access (role and visible domains), or a redirect.
 export async function requireViewer(): Promise<Access> {
-  const auth = await getAuth()
-  if (auth.status === 'ok') return authorize(auth.session)
-  redirectAway(auth)
+  const access = await accessFor()
+  if (access) return access
+  redirectAway(await getAuth())
 }
 
 // For pages that need more than viewing. Someone signed in with too low a
@@ -40,8 +46,8 @@ export async function requirePageRole(minimum: Role): Promise<Access> {
 
 // For actions and route handlers: null unless the caller has the role.
 export async function getAccessWithRole(minimum: Role): Promise<Access | null> {
-  const auth = await getAuth()
-  return auth.status === 'ok' && atLeast(auth.session.role, minimum) ? authorize(auth.session) : null
+  const access = await accessFor()
+  return access && atLeast(access.role, minimum) ? access : null
 }
 
 export async function getAdminSession() {
