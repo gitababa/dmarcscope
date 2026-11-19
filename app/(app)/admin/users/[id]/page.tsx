@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { FocusedSubmitButton, SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
+import { Avatar, Card, Notice, PageHeader, Pill } from '@/components/ui'
 import { getUserScope, listUserGroups } from '@/lib/access-admin'
 import { getUser } from '@/lib/admin'
 import { atLeast } from '@/lib/auth/roles'
@@ -11,7 +11,6 @@ import type { Role } from '@/lib/auth/types'
 import { getPool } from '@/lib/db'
 import { fmtDate, relTime } from '@/lib/format'
 import { clearUserScopeAction, setUserScopeAction } from '../../access-actions'
-import { AdminNav } from '../../nav'
 import { changeRoleAction, disableAction, enableAction, removeAction, signOutEverywhereAction } from '../../people-actions'
 import { ScopeFields } from '../../scope-fields'
 import { Notices, RoleSelect } from '../../shared'
@@ -45,22 +44,34 @@ export default async function AdminUserPage({
 
   return (
     <>
-      <Link href="/admin/users" className="crumb">
-        ← All users
-      </Link>
-      <div className="page-head">
-        <div>
-          <h1 style={{ overflowWrap: 'anywhere' }}>{user.name || user.email}</h1>
-          <p>
+      <PageHeader
+        crumbs={[{ href: '/admin/users', label: 'People' }, { label: user.name || user.email }]}
+        title={
+          <span className="row" style={{ gap: '0.8rem' }}>
+            <Avatar name={user.name || user.email} large />
+            {user.name || user.email}
+          </span>
+        }
+        badge={
+          <>
+            <Pill tone={user.role === 'viewer' ? 'muted' : 'info'}>{user.role}</Pill>
+            <Pill tone={user.status === 'active' ? 'ok' : user.status === 'pending' ? 'warn' : 'bad'} dot>
+              {user.status === 'pending' && user.invited ? 'invited' : user.status}
+            </Pill>
+          </>
+        }
+        lead={
+          <>
             {user.name ? `${user.email} · ` : ''}
             {self ? 'this is you' : `signs in via ${user.source}`}
-          </p>
-        </div>
-      </div>
-      <AdminNav current="/admin/users" />
+          </>
+        }
+      />
       <Notices error={error} done={done} />
 
-      <div className="card">
+      <div className="grid-main-side">
+      <div>
+      <Card title="Profile" icon="users">
         <dl className="kv-list">
           <dt>Role</dt>
           <dd>
@@ -102,14 +113,14 @@ export default async function AdminUserPage({
           <dt>Known since</dt>
           <dd>{fmtDate(user.created_at)}</dd>
         </dl>
-      </div>
+      </Card>
 
       <section className="section" aria-labelledby="scope-head">
-        <div className="section-head">
-          <h2 id="scope-head">Domain access</h2>
-        </div>
         {user.role !== 'viewer' ? (
           <div className="card">
+            <div className="card-head">
+              <h2 id="scope-head">Domain access</h2>
+            </div>
             <p className="small" style={{ margin: 0 }}>
               {user.role === 'owner' ? 'Owners' : 'Administrators'} always see every domain. A domain limit only applies to viewers. If you make a limited viewer an
               administrator, the limit stops applying.
@@ -117,6 +128,9 @@ export default async function AdminUserPage({
           </div>
         ) : (
           <div className="card">
+            <div className="card-head">
+              <h2 id="scope-head">Domain access</h2>
+            </div>
             <p className="small" style={{ marginTop: 0 }}>
               {scope
                 ? scope.mode === 'all'
@@ -152,18 +166,20 @@ export default async function AdminUserPage({
         )}
       </section>
 
+      </div>
+      <div>
       {!mayChange && (
-        <div className="notice" role="note">
+        <Notice tone="info" role="note">
           This person’s role is above yours, so you cannot change anything here.
-        </div>
+        </Notice>
       )}
 
       {mayChange && (
-        <section className="section" aria-labelledby="actions-head">
-          <div className="section-head">
-            <h2 id="actions-head">Change</h2>
-          </div>
-          <div className="card actions-card">
+        <section aria-labelledby="actions-head">
+          <div className="card actions-card" style={{ display: 'grid', gap: '1rem' }}>
+            <div className="card-head">
+              <h2 id="actions-head">Actions</h2>
+            </div>
             <form action={changeRoleAction} className="inline-form">
               {hidden}
               <RoleSelect actorRole={access.role} id="role" value={user.role} label="New role" />
@@ -192,7 +208,7 @@ export default async function AdminUserPage({
 
             {!self &&
               (confirm === 'remove' ? (
-                <form action={removeAction} className="notice bad confirm" role="alert">
+                <form action={removeAction} className="notice bad confirm" role="alert" style={{ marginBottom: 0 }}>
                   {hidden}
                   <input type="hidden" name="confirm" value="yes" />
                   <span>
@@ -210,12 +226,14 @@ export default async function AdminUserPage({
               ) : (
                 <form action={removeAction} className="inline-form">
                   {hidden}
-                  <SubmitButton className="btn btn-sm">Remove…</SubmitButton>
+                  <SubmitButton className="btn btn-sm btn-danger-ghost">Remove…</SubmitButton>
                 </form>
               ))}
           </div>
         </section>
       )}
+      </div>
+      </div>
     </>
   )
 }

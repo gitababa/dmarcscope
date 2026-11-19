@@ -1,8 +1,8 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
-import { listPendingRequests } from '@/lib/admin'
+import { Icon } from '@/components/icons'
+import { EmptyState, Notice, PageHeader, Pill } from '@/components/ui'
 import {
   CHANNEL_KINDS,
   type ChannelKind,
@@ -29,7 +29,6 @@ import {
   updateChannelAction,
   updateRuleAction,
 } from '../alerts-actions'
-import { AdminNav } from '../nav'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Alerts' }
@@ -88,7 +87,7 @@ function RuleForm({ rule, channels, kind }: { rule?: RuleRowT; channels: Channel
     <form action={rule ? updateRuleAction : createRuleAction} className="form">
       {rule && <input type="hidden" name="id" value={rule.id} />}
       <input type="hidden" name="kind" value={kind} />
-      <div className="notice" role="note"><span>{RULE_KINDS[kind].help}</span></div>
+      <Notice tone="info" role="note">{RULE_KINDS[kind].help}</Notice>
       <Field id="name" label="Name" value={rule?.name ?? RULE_KINDS[kind].label} required maxLength={100} />
       {kind !== 'ingest_stale' && <Field id="domain" label="Domain" value={rule?.domain} maxLength={253} placeholder="every domain" hint="Leave empty to watch every domain." />}
       {needsVolume && <Field id="min_messages" label="Minimum messages" value={p.min_messages ?? 100} maxLength={8} hint="Fewer messages than this give no verdict." />}
@@ -149,19 +148,21 @@ function ChannelForm({ channel, kind }: { channel?: ChannelRowT; kind: ChannelKi
   )
 }
 
+type Tab = 'events' | 'rules' | 'channels' | 'history'
+const isTab = (v: unknown): v is Tab => v === 'events' || v === 'rules' || v === 'channels' || v === 'history'
+
 const isRuleKind = (v: unknown): v is RuleKind => typeof v === 'string' && v in RULE_KINDS
 const isChannelKind = (v: unknown): v is ChannelKind => typeof v === 'string' && v in CHANNEL_KINDS
 
 export default async function AdminAlertsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; field?: string; done?: string; new?: string; rule?: string; channel?: string; newchannel?: string; confirm?: string }>
+  searchParams: Promise<{ error?: string; field?: string; done?: string; new?: string; rule?: string; channel?: string; newchannel?: string; confirm?: string; tab?: string }>
 }) {
   const access = await requirePageRole('admin')
   const q = await searchParams
   const db = getPool()
-  const [pending, rules, channels, events, deliveries, evaluator, smtpHost] = await Promise.all([
-    listPendingRequests(access),
+  const [rules, channels, events, deliveries, evaluator, smtpHost] = await Promise.all([
     listRules(db),
     listChannels(db),
     listEvents(db),
@@ -174,29 +175,53 @@ export default async function AdminAlertsPage({
   const newRuleKind = isRuleKind(q.new) ? q.new : null
   const newChannelKind = isChannelKind(q.newchannel) ? q.newchannel : null
   const hasEmail = channels.some((c) => c.kind === 'email')
+  const openEvents = events.filter((e) => e.state === 'open').length
+  const failedDeliveries = deliveries.filter((d) => d.status === 'failed').length
+  // The tab follows what the page was asked to show, so the actions' redirects
+  // (?rule=, ?newchannel=, ?done=…) land on the right one.
+  const tab: Tab = isTab(q.tab)
+    ? q.tab
+    : q.rule || q.new || q.done?.startsWith('rule_')
+      ? 'rules'
+      : q.channel || q.newchannel || q.done?.startsWith('channel_')
+        ? 'channels'
+        : q.done === 'tested'
+          ? 'history'
+          : 'events'
+  const TABS: Array<{ key: Tab; label: string; count?: number; bad?: boolean }> = [
+    { key: 'events', label: 'Events', count: openEvents, bad: openEvents > 0 },
+    { key: 'rules', label: 'Rules', count: rules.length },
+    { key: 'channels', label: 'Channels', count: channels.length },
+    { key: 'history', label: 'Delivery history', count: failedDeliveries || undefined, bad: failedDeliveries > 0 },
+  ]
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>Get told when something needs attention: a new source failing DMARC, compliance dropping, ingest stalling, or a published record changing.</p>
-        </div>
-      </div>
-      <AdminNav current="/admin/alerts" pending={pending.length} />
+      <PageHeader title="Alerts" lead="Get told when something needs attention: a new source failing DMARC, compliance dropping, ingest stalling, or a published record changing." />
 
       {q.error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {ERRORS[q.error] ?? 'That could not be done.'}
           {q.error === 'invalid' && q.field && FIELDS[q.field] ? ` Check: ${FIELDS[q.field]}.` : ''}
-        </div>
+        </Notice>
       )}
-      {q.done && !q.error && DONE[q.done] && <div className="notice ok" role="status">{DONE[q.done]}</div>}
+      {q.done && !q.error && DONE[q.done] && <Notice tone="ok" role="status">{DONE[q.done]}</Notice>}
       {hasEmail && !smtpHost && (
-        <div className="notice warn" role="note"><span>An email channel exists but no SMTP server is set. The owner can set one in <Link href="/admin">Settings</Link>.</span></div>
+        <Notice tone="warn" role="note">An email channel exists but no SMTP server is set. The owner can set one in <Link href="/admin">Settings</Link>.</Notice>
       )}
 
-      <section className="section" aria-labelledby="state-head">
+      <nav className="tabs" aria-label="Alerts">
+        {TABS.map((t) => (
+          <a key={t.key} href={`/admin/alerts?tab=${t.key}`} aria-current={tab === t.key ? 'page' : undefined}>
+            {t.label}
+            {t.count != null && t.count > 0 && <span className={`count${t.bad ? ' bad' : ''}`}>{t.count}</span>}
+          </a>
+        ))}
+      </nav>
+
+      {tab === 'events' && (
+      <>
+      <section aria-labelledby="state-head">
         <div className="section-head"><h2 id="state-head">Evaluation</h2></div>
         <div className="card">
           <p className="small" style={{ margin: 0 }}>
@@ -209,7 +234,26 @@ export default async function AdminAlertsPage({
         </div>
       </section>
 
-      <section className="section" aria-labelledby="rules-head">
+      <section className="section" aria-labelledby="events-head">
+        <div className="section-head"><h2 id="events-head">Events</h2></div>
+        <div className="card flush" role="list" aria-label="Alert events">
+          {events.length === 0 && <div className="person-row muted">Nothing has fired yet.</div>}
+          {events.map((e) => (
+            <div className="person-row" role="listitem" key={e.id}>
+              <div className="person-who">
+                <div className="source-name">{e.summary}</div>
+                <div className="source-meta">{e.rule_name} · first seen {relTime(e.first_seen_at)}{e.resolved_at ? ` · cleared ${relTime(e.resolved_at)}` : ''}</div>
+              </div>
+              <div className="person-tags"><Pill tone={e.state === 'open' ? 'bad' : 'ok'}>{e.state === 'open' ? 'Open' : 'Cleared'}</Pill></div>
+            </div>
+          ))}
+        </div>
+      </section>
+      </>
+      )}
+
+      {tab === 'rules' && (
+      <section aria-labelledby="rules-head">
         <div className="section-head"><h2 id="rules-head">Rules</h2></div>
         <div className="card flush" role="list" aria-label="Alert rules">
           {rules.length === 0 && <div className="person-row muted">None yet. Nothing is sent until you add a rule and a channel.</div>}
@@ -263,8 +307,10 @@ export default async function AdminAlertsPage({
           )}
         </div>
       </section>
+      )}
 
-      <section className="section" aria-labelledby="channels-head">
+      {tab === 'channels' && (
+      <section aria-labelledby="channels-head">
         <div className="section-head"><h2 id="channels-head">Channels</h2></div>
         <div className="card flush" role="list" aria-label="Alert channels">
           {channels.length === 0 && <div className="person-row muted">None yet.</div>}
@@ -321,24 +367,10 @@ export default async function AdminAlertsPage({
           )}
         </div>
       </section>
+      )}
 
-      <section className="section" aria-labelledby="events-head">
-        <div className="section-head"><h2 id="events-head">Events</h2></div>
-        <div className="card flush" role="list" aria-label="Alert events">
-          {events.length === 0 && <div className="person-row muted">Nothing has fired yet.</div>}
-          {events.map((e) => (
-            <div className="person-row" role="listitem" key={e.id}>
-              <div className="person-who">
-                <div className="source-name">{e.summary}</div>
-                <div className="source-meta">{e.rule_name} · first seen {relTime(e.first_seen_at)}{e.resolved_at ? ` · cleared ${relTime(e.resolved_at)}` : ''}</div>
-              </div>
-              <div className="person-tags"><Pill tone={e.state === 'open' ? 'bad' : 'ok'}>{e.state === 'open' ? 'Open' : 'Cleared'}</Pill></div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section" aria-labelledby="history-head">
+      {tab === 'history' && (
+      <section aria-labelledby="history-head">
         <div className="section-head"><h2 id="history-head">Delivery history</h2></div>
         <div className="card flush" role="list" aria-label="Deliveries">
           {deliveries.length === 0 && <div className="person-row muted">Nothing sent yet.</div>}
@@ -354,6 +386,8 @@ export default async function AdminAlertsPage({
           ))}
         </div>
       </section>
+      )}
+
     </>
   )
 }

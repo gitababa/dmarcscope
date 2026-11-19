@@ -1,38 +1,58 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { Icon } from '@/components/icons'
 import {
-  getDomainSummaries,
-  getTopSources,
-  getRecentIngestRuns,
+  Card,
+  CategoryPill,
+  EmptyState,
+  Favicon,
+  GradeBadge,
+  HealthRing,
+  Notice,
+  PageHeader,
+  Pill,
+  RangeSwitcher,
+  RateCell,
+  SourceCell,
+  Stat,
+  policyLabel,
+  rateTone,
+} from '@/components/ui'
+import { VolumeChart } from '@/components/VolumeChart'
+import { requireViewer } from '@/lib/auth/server'
+import { fmtDate, fmtInt, parseRange, pct, policyTone, rangeLabel, rangeParam, relTime } from '@/lib/format'
+import { domainHealth, gradeFor, overallHealth, toneFor } from '@/lib/health'
+import {
   getDataExtent,
+  getDomainSummaries,
   getIngestHealth,
+  getLatestDnsChecksByDomain,
+  getProblemSources,
+  getRecentIngestRuns,
+  getTopSources,
   getVolumeTimeseries,
 } from '@/lib/queries'
-import { requireViewer } from '@/lib/auth/server'
 import { identifySource } from '@/lib/senders'
-import { fmtInt, fmtDate, pct, relTime, parseRange, rangeParam, rangeLabel, policyTone } from '@/lib/format'
-import { VolumeChart } from '@/components/VolumeChart'
-import { CategoryPill, Pill, RangeSwitcher, RateCell, Section, SourceCell, Stat, rateTone } from '@/components/ui'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Overview' }
 
-export default async function OverviewPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ range?: string }>
-}) {
+type DnsStatus = { dmarc?: { status?: string }; spf?: { status?: string } }
+
+export default async function OverviewPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   // Each page checks for itself; it does not rely on the layout or the proxy.
   const { domains: scope } = await requireViewer()
   const { range: rawRange } = await searchParams
   const days = parseRange(rawRange)
 
-  const [domains, sources, runs, health, timeseries] = await Promise.all([
+  const [domains, sources, runs, health, timeseries, problems, dnsChecks] = await Promise.all([
     getDomainSummaries(scope, days),
-    getTopSources(scope, days, 10),
+    getTopSources(scope, days, 8),
     getRecentIngestRuns(scope, 5),
     getIngestHealth(scope),
     getVolumeTimeseries(scope, days),
+    getProblemSources(scope, days, 5),
+    getLatestDnsChecksByDomain(scope),
   ])
 
   const totals = domains.reduce(
@@ -52,112 +72,257 @@ export default async function OverviewPage({
   const lastRun = runs[0]
   // The whole-table extent is only needed to explain an empty window.
   const extent = !hasData && days !== 0 && domains.length > 0 ? await getDataExtent(scope) : null
+
+  const graded = domains.map((d) => {
+    const dns = dnsChecks.get(d.name.toLowerCase()) as DnsStatus | undefined
+    return {
+      d,
+      health: domainHealth({
+        total: d.total_messages,
+        dmarcPass: d.dmarc_pass,
+        dkimPass: d.dkim_pass,
+        policy: d.policy,
+        dns: dns ? { dmarc: dns.dmarc?.status, spf: dns.spf?.status } : null,
+      }),
+    }
+  })
+  const overall = overallHealth(graded.map((g) => ({ total: g.d.total_messages, health: g.health })))
+  const overallHealthObj = { score: overall, grade: overall == null ? null : gradeFor(overall), tone: toneFor(overall), factors: [] }
+  const enforcing = domains.filter((d) => d.policy === 'reject' || d.policy === 'quarantine').length
+  const weakDomains = graded.filter((g) => g.health.score != null && g.health.score < 75).sort((a, b) => (a.health.score ?? 0) - (b.health.score ?? 0))
+
   const staleNotice = health.status === 'stale' && (
-    <div className="notice warn" role="status">
-      <span>
-        <strong>Reports are not being ingested.</strong>{' '}
-        {health.last_success_at
-          ? `The last ingest run that completed was ${relTime(health.last_success_at)}`
-          : 'No ingest run has completed yet'}
-        {health.last_run_failed ? ', and the most recent run failed' : ''}. What you see below may be out of date —
-        check the ingest job&apos;s schedule and logs.
-      </span>
-    </div>
+    <Notice tone="warn" role="status" action={<Link href="/admin/mail" className="btn btn-sm">Check mailboxes</Link>}>
+      <strong>Reports are not being ingested.</strong>{' '}
+      {health.last_success_at ? `The last ingest run that completed was ${relTime(health.last_success_at)}` : 'No ingest run has completed yet'}
+      {health.last_run_failed ? ', and the most recent run failed' : ''}. What you see below may be out of date — check the ingest job&apos;s
+      schedule and logs.
+    </Notice>
   )
 
   // Nothing ingested at all yet: show setup guidance instead of empty tables.
   if (domains.length === 0) {
     return (
       <>
-        <div className="page-head">
-          <div>
-            <h1>Overview</h1>
-            <p>No DMARC reports have been ingested yet.</p>
-          </div>
-        </div>
+        <PageHeader title="Welcome" lead="No DMARC reports have been ingested yet. Here is how to get your first ones." />
         {staleNotice}
         <Onboarding hasRun={runs.length > 0} />
-        {runs.length > 0 && <IngestRuns runs={runs} />}
+        {runs.length > 0 && (
+          <div className="section">
+            <IngestRuns runs={runs} />
+          </div>
+        )}
       </>
     )
   }
 
+  const verdict =
+    overall == null
+      ? 'No mail was reported in this range.'
+      : overall >= 90
+        ? 'Your domains are well protected and your own mail authenticates.'
+        : overall >= 75
+          ? 'Mostly healthy. A few things would tighten protection further.'
+          : overall >= 60
+            ? 'Some legitimate mail is failing, or policies are not enforced yet.'
+            : 'Action needed: significant mail fails DMARC, or spoofing is not blocked.'
+
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Overview</h1>
-          <p>
-            {rangeLabel(days)} · {domains.length} {domains.length === 1 ? 'domain' : 'domains'}
+      <PageHeader
+        title="Overview"
+        lead={
+          <>
+            {rangeLabel(days)} across {domains.length} {domains.length === 1 ? 'domain' : 'domains'}
             {lastRun && <> · last ingest {relTime(lastRun.started_at)}</>}
-          </p>
-        </div>
-        <RangeSwitcher basePath="/" active={days} />
-      </div>
+          </>
+        }
+        actions={<RangeSwitcher basePath="/" active={days} />}
+      />
 
       {staleNotice}
 
       {extent && extent.total_messages > 0 && (
-        <div className="notice warn">
-          <span>
-            No reports fall inside this window, but {fmtInt(extent.total_messages)} messages are on record from{' '}
-            {fmtDate(extent.min_date)} to {fmtDate(extent.max_date)}.
-          </span>
-          <Link href="/?range=all" className="btn btn-sm">
-            View all time
-          </Link>
-        </div>
+        <Notice tone="warn" action={<Link href="/?range=all" className="btn btn-sm">View all time</Link>}>
+          No reports fall inside this window, but {fmtInt(extent.total_messages)} messages are on record from {fmtDate(extent.min_date)} to{' '}
+          {fmtDate(extent.max_date)}.
+        </Notice>
       )}
 
+      <section className="card hero" aria-labelledby="posture-head">
+        <HealthRing health={overallHealthObj} size={132} caption="score" />
+        <div>
+          <div className="hero-title">
+            <h2 id="posture-head">Email security posture</h2>
+            {overall != null && <GradeBadge grade={gradeFor(overall)} />}
+          </div>
+          <p>
+            {verdict} The score weighs each domain by its volume: authentication rate, policy enforcement and DKIM coverage.{' '}
+            <Link href={`/domains?range=${range}`}>See each domain</Link>.
+          </p>
+          <div className="hero-stats">
+            <div>
+              <div className="kv-label">Domains enforcing</div>
+              <div className="kv-value">
+                {enforcing} <span className="muted small">of {domains.length}</span>
+              </div>
+            </div>
+            <div>
+              <div className="kv-label">Needing attention</div>
+              <div className={`kv-value${weakDomains.length ? ' tone-warn' : ''}`}>{weakDomains.length}</div>
+            </div>
+            <div>
+              <div className="kv-label">Failing sources</div>
+              <div className={`kv-value${problems.length ? ' tone-bad' : ''}`}>{problems.length >= 5 ? '5+' : problems.length}</div>
+            </div>
+            <div>
+              <div className="kv-label">Reports processed</div>
+              <div className="kv-value">{fmtInt(domains.reduce((a, d) => a + d.report_count, 0))}</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div className="stat-grid">
-        <Stat label="Messages reported" value={fmtInt(totals.messages)} />
+        <Stat icon="mail" label="Messages reported" value={fmtInt(totals.messages)} sub={rangeLabel(days)} />
         <Stat
+          icon="shield"
           label="DMARC compliance"
           value={pct(rate(totals.pass))}
           tone={hasData ? rateTone(rate(totals.pass)) : undefined}
           rate={hasData ? rate(totals.pass) : undefined}
         />
-        <Stat label="DKIM aligned" value={pct(rate(totals.dkim))} />
-        <Stat label="SPF aligned" value={pct(rate(totals.spf))} />
+        <Stat icon="key" label="DKIM aligned" value={pct(rate(totals.dkim))} rate={hasData ? rate(totals.dkim) : undefined} tone={hasData ? rateTone(rate(totals.dkim)) : undefined} />
+        <Stat icon="server" label="SPF aligned" value={pct(rate(totals.spf))} rate={hasData ? rate(totals.spf) : undefined} tone={hasData ? rateTone(rate(totals.spf)) : undefined} />
         <Stat
+          icon="alert"
           label="Failing messages"
           value={hasData ? fmtInt(totals.fail) : '—'}
           tone={!hasData ? undefined : totals.fail === 0 ? 'ok' : 'bad'}
-          sub={hasData && totals.fail > 0 ? 'View problem sources →' : undefined}
+          sub={hasData && totals.fail > 0 ? 'View the failing sources' : undefined}
           href={`/issues?range=${range}`}
         />
       </div>
 
-      <Section title="Volume">
-        <VolumeChart data={timeseries} />
-      </Section>
+      <div className="grid-main-side">
+        <Card title="Mail volume & compliance" icon="activity" sub="Daily messages reported by receivers">
+          <div className="card-body" style={{ paddingTop: '0.25rem' }}>
+            <VolumeChart data={timeseries} />
+          </div>
+        </Card>
 
-      <Section title="Domains">
-        <div className="card flush">
+        <Card
+          title="Needs attention"
+          icon="alert"
+          flush
+          action={
+            <Link href={`/issues?range=${range}`} className="btn btn-sm btn-ghost">
+              All issues <Icon name="arrowRight" size={13} />
+            </Link>
+          }
+        >
+          {problems.length === 0 && weakDomains.length === 0 ? (
+            <EmptyState icon="checkCircle" title="All clear">
+              No source fails DMARC in this range, and every domain grades B or better.
+            </EmptyState>
+          ) : (
+            <div>
+              {weakDomains.slice(0, 3).map(({ d, health: h }) => (
+                <Link key={d.name} href={`/domains/${encodeURIComponent(d.name)}?range=${range}`} className="attn">
+                  <GradeBadge grade={h.grade} />
+                  <div className="attn-body">
+                    <div className="attn-title">{d.name}</div>
+                    <div className="attn-sub">
+                      {policyLabel(d.policy)} · {pct(d.total_messages ? d.dmarc_pass / d.total_messages : NaN)} compliant
+                    </div>
+                  </div>
+                  <div className="attn-val">
+                    {h.score}
+                    <small>score</small>
+                  </div>
+                </Link>
+              ))}
+              {problems.map((s) => {
+                const id = identifySource({
+                  reverse_dns: s.reverse_dns,
+                  base_domain: s.base_domain,
+                  provider_name: s.provider_name,
+                  as_name: s.as_name,
+                  total: s.total_messages,
+                  dkim_passed: s.dkim_passed,
+                  spf_passed: s.spf_passed,
+                  dmarc_passed: s.passed,
+                })
+                return (
+                  <Link key={`${s.source_ip}-${s.domain}`} href={`/issues?range=${range}&domain=${encodeURIComponent(s.domain)}`} className="attn">
+                    <span className="row-icon bad">
+                      <Icon name="xCircle" size={16} />
+                    </span>
+                    <div className="attn-body">
+                      <div className="attn-title">{id.name || s.reverse_dns || s.source_ip}</div>
+                      <div className="attn-sub">
+                        as {s.domain} · {s.source_ip}
+                      </div>
+                    </div>
+                    <div className="attn-val tone-bad">
+                      {fmtInt(s.failing)}
+                      <small>failing</small>
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div className="section">
+        <Card
+          title="Domains"
+          icon="globe"
+          flush
+          sub={`${domains.length} monitored`}
+          action={
+            <Link href={`/domains?range=${range}`} className="btn btn-sm btn-ghost">
+              Domain health <Icon name="arrowRight" size={13} />
+            </Link>
+          }
+        >
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Domain</th>
+                  <th>Health</th>
                   <th>Policy</th>
                   <th className="num">Messages</th>
                   <th className="num">DMARC</th>
                   <th className="num">DKIM</th>
                   <th className="num">SPF</th>
                   <th className="num">Failing</th>
-                  <th className="num">Reports</th>
                 </tr>
               </thead>
               <tbody>
-                {domains.map((d) => {
+                {graded.map(({ d, health: h }) => {
                   const t = d.total_messages
                   return (
                     <tr key={d.name}>
                       <td className="wrap">
-                        <Link href={`/domains/${encodeURIComponent(d.name)}?range=${range}`}>{d.name}</Link>
+                        <div className="cell-main">
+                          <Favicon name={d.name} />
+                          <Link className="row-link" href={`/domains/${encodeURIComponent(d.name)}?range=${range}`}>
+                            {d.name}
+                          </Link>
+                        </div>
                       </td>
                       <td>
-                        <Pill tone={policyTone(d.policy)}>{d.policy ? `p=${d.policy}` : 'unknown'}</Pill>
+                        <span className="row" style={{ gap: '0.45rem' }}>
+                          <GradeBadge grade={h.grade} />
+                          <span className="muted small">{h.score ?? '—'}</span>
+                        </span>
+                      </td>
+                      <td>
+                        <Pill tone={policyTone(d.policy)}>{policyLabel(d.policy)}</Pill>
                       </td>
                       <td className="num">{fmtInt(t)}</td>
                       <td className="num">
@@ -165,34 +330,42 @@ export default async function OverviewPage({
                       </td>
                       <td className="num muted">{t > 0 ? pct(d.dkim_pass / t) : '—'}</td>
                       <td className="num muted">{t > 0 ? pct(d.spf_pass / t) : '—'}</td>
-                      <td className={`num ${d.dmarc_fail > 0 ? 'tone-bad' : 'muted'}`}>
+                      <td className="num">
                         {t > 0 ? (
                           d.dmarc_fail > 0 ? (
                             <Link className="tone-bad" href={`/issues?range=${range}&domain=${encodeURIComponent(d.name)}`}>
                               {fmtInt(d.dmarc_fail)}
                             </Link>
                           ) : (
-                            '0'
+                            <span className="muted">0</span>
                           )
                         ) : (
-                          '—'
+                          <span className="muted">—</span>
                         )}
                       </td>
-                      <td className="num muted">{fmtInt(d.report_count)}</td>
                     </tr>
                   )
                 })}
               </tbody>
             </table>
           </div>
-        </div>
-      </Section>
+        </Card>
+      </div>
 
-      <Section title="Top sending sources">
-        {sources.length === 0 ? (
-          <div className="empty">No source data in this range.</div>
-        ) : (
-          <div className="card flush">
+      <div className="grid-main-side section">
+        <Card
+          title="Top sending sources"
+          icon="server"
+          flush
+          action={
+            <Link href={`/sources?range=${range}`} className="btn btn-sm btn-ghost">
+              All sources <Icon name="arrowRight" size={13} />
+            </Link>
+          }
+        >
+          {sources.length === 0 ? (
+            <EmptyState icon="server">No source data in this range.</EmptyState>
+          ) : (
             <div className="table-wrap">
               <table>
                 <thead>
@@ -201,8 +374,6 @@ export default async function OverviewPage({
                     <th>Category</th>
                     <th className="num">Messages</th>
                     <th className="num">DMARC</th>
-                    <th className="num">DKIM</th>
-                    <th className="num">SPF</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -217,7 +388,6 @@ export default async function OverviewPage({
                       spf_passed: s.spf_passed,
                       dmarc_passed: s.passed,
                     })
-                    const t = s.total_messages
                     return (
                       <tr key={s.source_ip}>
                         <td>
@@ -226,116 +396,117 @@ export default async function OverviewPage({
                         <td>
                           <CategoryPill identity={id} />
                         </td>
-                        <td className="num">{fmtInt(t)}</td>
+                        <td className="num">{fmtInt(s.total_messages)}</td>
                         <td className="num">
-                          <RateCell passed={s.passed} total={t} />
+                          <RateCell passed={s.passed} total={s.total_messages} />
                         </td>
-                        <td className="num muted">{t > 0 ? pct(s.dkim_passed / t) : '—'}</td>
-                        <td className="num muted">{t > 0 ? pct(s.spf_passed / t) : '—'}</td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
-      </Section>
-
-      <IngestRuns runs={runs} />
+          )}
+        </Card>
+        <IngestRuns runs={runs} />
+      </div>
     </>
+  )
+}
+
+function RunStatus({ r }: { r: Awaited<ReturnType<typeof getRecentIngestRuns>>[number] }) {
+  if (r.failed)
+    return (
+      <Pill tone="bad" dot title="The mailbox or the database could not be reached; see the ingest job's logs">
+        failed
+      </Pill>
+    )
+  if (r.stalled)
+    return (
+      <Pill tone="bad" dot title="Started over an hour ago and never finished">
+        did not finish
+      </Pill>
+    )
+  if (r.finished_at == null)
+    return (
+      <Pill tone="info" dot>
+        running
+      </Pill>
+    )
+  if (r.had_errors)
+    return (
+      <Pill tone="warn" dot title="Some messages could not be processed; see the ingest job's logs">
+        with errors
+      </Pill>
+    )
+  return (
+    <Pill tone="ok" dot>
+      ok
+    </Pill>
   )
 }
 
 function IngestRuns({ runs }: { runs: Awaited<ReturnType<typeof getRecentIngestRuns>> }) {
   return (
-    <Section title="Recent ingest runs">
+    <Card title="Recent ingest runs" icon="inbox" flush>
       {runs.length === 0 ? (
-        <div className="empty">The ingest job has not run yet.</div>
+        <EmptyState icon="clock">The ingest job has not run yet.</EmptyState>
       ) : (
-        <div className="card flush">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Started</th>
-                  <th className="num">Messages fetched</th>
-                  <th className="num">Reports stored</th>
-                  <th className="num">Skipped</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((r) => (
-                  <tr key={r.id}>
-                    <td title={r.started_at}>{relTime(r.started_at)}</td>
-                    <td className="num">{fmtInt(r.messages_fetched)}</td>
-                    <td className="num">{fmtInt(r.reports_parsed)}</td>
-                    <td className="num muted">{fmtInt(r.reports_skipped)}</td>
-                    <td>
-                      {r.failed ? (
-                        <Pill tone="bad" title="The mailbox or the database could not be reached; see the ingest job's logs">
-                          failed
-                        </Pill>
-                      ) : r.stalled ? (
-                        <Pill tone="bad" title="Started over an hour ago and never finished">
-                          did not finish
-                        </Pill>
-                      ) : r.finished_at == null ? (
-                        <Pill tone="info">running</Pill>
-                      ) : r.had_errors ? (
-                        <Pill tone="warn" title="Some messages could not be processed; see the ingest job's logs">
-                          completed with errors
-                        </Pill>
-                      ) : (
-                        <Pill tone="ok">ok</Pill>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <div>
+          {runs.map((r) => (
+            <div className="list-row" key={r.id}>
+              <div className="person-who" style={{ flexBasis: 140 }}>
+                <div className="source-name" title={r.started_at} style={{ fontSize: '0.86rem' }}>
+                  {relTime(r.started_at)}
+                </div>
+                <div className="muted small">
+                  {fmtInt(r.reports_parsed)} stored · {fmtInt(r.messages_fetched)} fetched
+                  {r.reports_skipped ? ` · ${fmtInt(r.reports_skipped)} skipped` : ''}
+                </div>
+              </div>
+              <RunStatus r={r} />
+            </div>
+          ))}
         </div>
       )}
-    </Section>
+    </Card>
   )
 }
 
 function Onboarding({ hasRun }: { hasRun: boolean }) {
   return (
-    <div className="card">
-      <h2 className="section-title">Getting your first reports</h2>
+    <Card title="Getting your first reports" icon="zap">
       <p className="muted" style={{ margin: 0 }}>
-        Mailbox providers send a daily aggregate report to the address named in each domain&apos;s DMARC record. This
-        app reads those reports from a mailbox and turns them into dashboards.
+        Mailbox providers send a daily aggregate report to the address named in each domain&apos;s DMARC record. This app reads those
+        reports from a mailbox and turns them into dashboards.
       </p>
       <ol className="steps">
         <li>
           <strong>Publish a DMARC record that requests reports</strong>
           <span className="muted">
-            Add a TXT record at <code>_dmarc.yourdomain.com</code> pointing <code>rua</code> at a mailbox you control.
-            Start with <code>p=none</code> — it only monitors.
+            Add a TXT record at <code>_dmarc.yourdomain.com</code> pointing <code>rua</code> at a mailbox you control. Start with{' '}
+            <code>p=none</code> — it only monitors.
           </span>
           <pre>v=DMARC1; p=none; rua=mailto:dmarc-reports@yourdomain.com</pre>
         </li>
         <li>
-          <strong>Give the ingest job access to that mailbox</strong>
+          <strong>Connect that mailbox and list your domains</strong>
           <span className="muted">
-            Set <code>IMAP_HOST</code>, <code>IMAP_USER</code> and <code>IMAP_PASSWORD</code> for the ingest job (see
-            the README). Reports for a different domain than the mailbox&apos;s need a one-line authorization record
-            there too.
+            An administrator adds the mailbox under <Link href="/admin/mail">Mailboxes</Link> and the domains under{' '}
+            <Link href="/admin/domains">Monitored domains</Link> (or sets <code>IMAP_HOST</code>, <code>IMAP_USER</code> and{' '}
+            <code>IMAP_PASSWORD</code> for the ingest job). Reports for a different domain than the mailbox&apos;s need a one-line
+            authorization record there too.
           </span>
         </li>
         <li>
-          <strong>Run the ingest job</strong>
+          <strong>Let the worker run</strong>
           <span className="muted">
             {hasRun
               ? 'The job has run, but found no reports yet. Providers usually send the first ones within 24–48 hours of the DNS record going live.'
-              : 'Schedule it (daily is plenty) or run it once by hand. Providers usually send the first reports within 24–48 hours of the DNS record going live.'}
+              : 'Start the ingest worker (or schedule it). Providers usually send the first reports within 24–48 hours of the DNS record going live.'}
           </span>
         </li>
       </ol>
-    </div>
+    </Card>
   )
 }

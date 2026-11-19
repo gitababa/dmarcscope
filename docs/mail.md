@@ -2,8 +2,8 @@
 
 DMARC reports arrive by email. The ingest worker reads them from one or more mailboxes,
 keeps the reports about the domains you monitor and ignores the rest. Since 2.0 both the
-mailboxes and the domain list can be set up in the browser, under **Admin → Mail** and
-**Admin → Domains**, with no mailbox variables in the environment. The 1.1.0 way, a single
+mailboxes and the domain list can be set up in the browser, under **Mailboxes** and
+**Monitored domains**, with no mailbox variables in the environment. The 1.1.0 way, a single
 mailbox from `IMAP_*` variables read by `python -m ingestor run`, keeps working unchanged
 (see [configuration.md](configuration.md#ingest-worker)).
 
@@ -51,7 +51,7 @@ minutes.
 ## Monitored domains
 
 Anyone can email a report about any domain to your mailbox, so DMARCscope only keeps reports
-about the domains you list under **Admin → Domains**. Reports about other domains are marked
+about the domains you list under **Monitored domains**. Reports about other domains are marked
 read and ignored.
 
 - **A mailbox set up in the panel reads nothing until at least one domain is listed.** Each
@@ -64,7 +64,7 @@ read and ignored.
 
 ## Retention
 
-**Admin → Settings → Keep reports for (days)**: reports older than this are deleted by the
+**Settings → Keep reports for (days)**: reports older than this are deleted by the
 worker on each run. Unset keeps reports forever. `RETENTION_DAYS` in the environment wins over
 the panel, and `RETENTION_DAYS=0` means forever, as in 1.1.0.
 
@@ -108,7 +108,7 @@ password is involved, and the app can open no other mailbox.
    ```
 
    It can take a while (Microsoft says up to an hour) before the permission works.
-5. In **Admin → Mail → Add a mailbox → Microsoft 365**, enter the mailbox address, tenant ID,
+5. In **Mailboxes → Add a mailbox → Microsoft 365**, enter the mailbox address, tenant ID,
    client ID and the secret value, then **Test connection**.
 
 The worker requests a token from `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`
@@ -144,7 +144,7 @@ mailbox.
    `https://mail.google.com/`.
 4. **Make sure IMAP is allowed** for the reports mailbox (*Apps → Google Workspace → Gmail →
    End user access*).
-5. In **Admin → Mail → Add a mailbox → Google Workspace**, enter the mailbox address and paste
+5. In **Mailboxes → Add a mailbox → Google Workspace**, enter the mailbox address and paste
    the whole JSON key file, then **Test connection**.
 
 The worker signs a one-hour JWT with the key (issuer: the service account; subject: the mailbox;
@@ -163,7 +163,7 @@ anyone can send, so they are shortened, shown on one line and displayed as plain
 
 | You see | Meaning |
 |---|---|
-| `no monitored domains are configured` | Add a domain under Admin → Domains. |
+| `no monitored domains are configured` | Add a domain under Monitored domains. |
 | `the saved secret cannot be decrypted (unknown_key)` | The worker's `APP_SECRET` differs from the web app's, or `APP_SECRET` was rotated without `APP_SECRET_PREVIOUS`. Fix the variable, or save the secret again. |
 | `[AUTHENTICATIONFAILED] Invalid credentials` (or similar) | Wrong user name or password. |
 | `invalid_client: …`, `unauthorized_client: …`, `invalid_grant: …` | The provider refused the app's credentials or the delegation. The text after the colon is the provider's own explanation. |

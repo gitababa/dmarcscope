@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { FocusedSubmitButton, SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
-import { listPendingRequests } from '@/lib/admin'
+import {Card,Notice,PageHeader,Pill } from '@/components/ui'
 import { authProvider } from '@/lib/auth'
 import { redirectUri } from '@/lib/auth/oidc'
 import { atLeast } from '@/lib/auth/roles'
@@ -11,7 +10,6 @@ import { relTime } from '@/lib/format'
 import { configStore } from '@/lib/settings'
 import { type ConnectionRow, PRESETS, type Preset, activationProblem, getConnection } from '@/lib/sso'
 import { updateSettingAction } from '../actions'
-import { AdminNav } from '../nav'
 import { activateAction, deactivateAction, discardDraftAction, saveDraftAction, startDraftAction } from '../sso-actions'
 
 export const dynamic = 'force-dynamic'
@@ -61,8 +59,7 @@ export default async function AdminSsoPage({
   const { error, field, done, confirm } = await searchParams
   const db = getPool()
   const provider = authProvider()
-  const [pending, draft, active, settings] = await Promise.all([
-    listPendingRequests(access),
+  const [draft, active, settings] = await Promise.all([
     getConnection(db, 'draft'),
     getConnection(db, 'active'),
     configStore().list(),
@@ -71,27 +68,19 @@ export default async function AdminSsoPage({
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>
-            How people sign in. The owner can always sign in with their password and authenticator, whatever is set
-            here, so a broken connection never locks you out.
-          </p>
-        </div>
-      </div>
-      <AdminNav current="/admin/sso" pending={pending.length} />
+      <PageHeader title="Sign-in" lead={<>How people sign in. The owner can always sign in with their password and authenticator, whatever is set
+            here, so a broken connection never locks you out.</>} />
 
       {error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {ERRORS[error] ?? 'That could not be done.'}
           {error === 'invalid' && field && FIELD[field] ? ` Check: ${FIELD[field]}.` : ''}
-        </div>
+        </Notice>
       )}
       {done && !error && DONE[done] && (
-        <div className="notice ok" role="status">
+        <Notice tone="ok" role="status">
           {DONE[done]}
-        </div>
+        </Notice>
       )}
 
       {provider === 'oidc' && (
@@ -268,9 +257,7 @@ function DraftEditor({ draft, isOwner }: { draft: ConnectionRow; isOwner: boolea
 
   return (
     <>
-      <div className="notice" role="note">
-        <span>{PRESETS[preset].note}</span>
-      </div>
+      <Notice tone="info" role="note">{PRESETS[preset].note}</Notice>
       <form action={saveDraftAction} className="form">
         <div className="field">
           <label htmlFor="d-preset">Provider</label>

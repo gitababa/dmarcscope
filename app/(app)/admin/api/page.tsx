@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
+import {Card,Notice,PageHeader,Pill } from '@/components/ui'
 import { TokenForm } from '@/components/token-form'
 import { API_SCOPES, listTokens } from '@/lib/api-tokens'
 import { requirePageRole } from '@/lib/auth/server'
@@ -8,11 +8,10 @@ import { appUrl } from '@/lib/config'
 import { getPool } from '@/lib/db'
 import { fmtDate, relTime } from '@/lib/format'
 import { createApiTokenAction, createScimTokenAction, revokeTokenAction } from '../access-actions'
-import { AdminNav } from '../nav'
 import { Notices } from '../shared'
 
 export const dynamic = 'force-dynamic'
-export const metadata: Metadata = { title: 'API access' }
+export const metadata: Metadata = { title: 'API & SCIM' }
 
 const SCOPE_HELP: Record<(typeof API_SCOPES)[number], string> = {
   'domains:read': 'domain list, summary and volume over time',
@@ -61,13 +60,7 @@ export default async function ApiAccessPage({ searchParams }: { searchParams: Pr
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>API access</h1>
-          <p>Read-only API tokens and the token your identity provider uses to provision people with SCIM.</p>
-        </div>
-      </div>
-      <AdminNav current="/admin/api" />
+      <PageHeader title="API & SCIM" lead="Read-only API tokens and the token your identity provider uses to provision people with SCIM." />
       <Notices error={error} done={done} />
 
       <section className="section" aria-labelledby="api-head">
@@ -131,7 +124,7 @@ export default async function ApiAccessPage({ searchParams }: { searchParams: Pr
             Point your identity provider’s SCIM client at <code>{base || 'https://your-app'}/scim/v2</code> with a bearer token. Provisioned people are viewers;
             SCIM cannot grant roles, change an e-mail address or touch an owner. Deactivating someone signs them out on their next request.
           </p>
-          {!isOwner && <div className="notice" role="note">Only an owner can create or revoke the SCIM token.</div>}
+          {!isOwner && <Notice tone="info" role="note">Only an owner can create or revoke the SCIM token.</Notice>}
         </div>
         <div className="card flush" role="list" aria-label="SCIM tokens" style={{ marginTop: '0.8rem' }}>
           {scimTokens.length === 0 && <div className="person-row muted">No SCIM token yet.</div>}

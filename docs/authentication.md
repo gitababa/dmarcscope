@@ -27,7 +27,7 @@ With only `DATABASE_URL`, `APP_URL` and `APP_SECRET` set, the app manages sign-i
 - The owner signs in with an email address, a password and a code from an authenticator app
   (TOTP), or a recovery code instead of the app code.
 - Single sign-on (any OpenID Connect provider) is configured, tested and activated in the panel
-  under **Admin → Sign-in**: see [sso.md](sso.md). Until a connection is active, the owner is
+  under **Sign-in**: see [sso.md](sso.md). Until a connection is active, the owner is
   the only person who can sign in in this mode.
 
 ### First run: the setup wizard
@@ -84,7 +84,7 @@ Everyone who signs in is recorded in the users table:
 A role that came from a rule is worked out again on every request, so removing the rule removes
 the access, as it always did.
 
-### Managing people (Admin → Users, Admin → Access rules)
+### Managing people (People, Access rules)
 
 Administrators and the owner can:
 
@@ -106,7 +106,7 @@ Guard rails, enforced on the server whatever the page showed:
 - the last active owner cannot be demoted, disabled or removed;
 - every change, and every refused attempt, is recorded in the audit log.
 
-**Admin → Audit log** filters by action, who, target and date, and downloads the filtered log as
+**Audit log** filters by action, who, target and date, and downloads the filtered log as
 CSV (at most 100,000 rows; the download itself is recorded). Cells a spreadsheet would treat as a
 formula are prefixed with `'`.
 
@@ -117,7 +117,7 @@ a person must match at least one rule (or have been given a role). Rules come fr
 the environment variables below, which cannot be changed in the panel, and the database, where
 `npm run settings:import` can copy them (and the panel will manage them in a later 2.0 release).
 All values are comma-separated and case-insensitive. Database rules are managed under
-**Admin → Access rules**, which also lists the environment's rules (read-only).
+**Access rules**, which also lists the environment's rules (read-only).
 
 | Variable | Grants |
 |---|---|
@@ -164,7 +164,7 @@ How quickly a removal takes effect depends on where you remove them:
 |---|---|
 | An access list (`ALLOWED_*`, `ADMIN_*`) | When the app restarts with the new value — the lists are environment variables, checked on every request. |
 | A database access rule | Within `SETTINGS_CACHE_SECONDS` (default 5) on every instance. |
-| The person in **Admin → Users**: disabled, role changed, removed, or "sign out everywhere" | On their next request. |
+| The person in **People**: disabled, role changed, removed, or "sign out everywhere" | On their next request. |
 | The person's account or groups at the provider, with `proxy-jwt` / `proxy-header` | On their next request (as fast as the proxy enforces it). |
 | The person's account or groups at the provider, with `oidc` | When their session expires: the identity and groups are fixed at sign-in for `SESSION_MAX_AGE_HOURS` (default 12, maximum 168). |
 
@@ -305,7 +305,7 @@ it from inside the network.
 
 Sign-ins, refused and failed sign-ins, access requests, sign-outs, DNS checks, setting changes,
 user changes and every setup step are recorded in the `audit_log` table, which administrators can
-read under **Admin → Audit log**. The table is append-only: the application has no way to change
+read under **Audit log**. The table is append-only: the application has no way to change
 or delete an entry, and the database refuses `UPDATE` and `DELETE` on it. Entries record that a
 secret changed, never its value.
 

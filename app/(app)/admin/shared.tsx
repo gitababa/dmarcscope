@@ -1,3 +1,4 @@
+import { Notice } from '@/components/ui'
 import type { Role } from '@/lib/auth/types'
 import { atLeast } from '@/lib/auth/roles'
 
@@ -36,14 +37,14 @@ export function Notices({ error, done }: { error?: string; done?: string }) {
   return (
     <>
       {error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {ERRORS[error] ?? 'That could not be done.'}
-        </div>
+        </Notice>
       )}
       {done && !error && DONE[done] && (
-        <div className="notice ok" role="status">
+        <Notice tone="ok" role="status">
           {DONE[done]}
-        </div>
+        </Notice>
       )}
     </>
   )

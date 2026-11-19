@@ -5,6 +5,7 @@
 
 import { useActionState, type ReactNode } from 'react'
 import { SubmitButton } from './client'
+import { Notice } from './ui'
 
 export type TokenFormState = { error?: string; token?: string; name?: string }
 
@@ -32,12 +33,12 @@ export function TokenForm({
   return (
     <>
       {state.error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {ERRORS[state.error] ?? 'That could not be done.'}
-        </div>
+        </Notice>
       )}
       {state.token && (
-        <div className="notice ok" role="status">
+        <Notice tone="ok" role="status">
           <p>
             Token <strong>{state.name}</strong> created. Copy it now: it is shown only once and cannot be recovered.
           </p>
@@ -46,7 +47,7 @@ export function TokenForm({
               {state.token}
             </code>
           </p>
-        </div>
+        </Notice>
       )}
       <form action={run} className="form-grid">
         {children}

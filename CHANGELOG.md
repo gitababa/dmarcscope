@@ -6,6 +6,38 @@ share one version number (`package.json` and `ingestor/__init__.py`).
 Upgrading: deploy the new images, then run the migration command
 (`node scripts/migrate.mjs`) before the new web version starts.
 
+## Unreleased
+
+### Changed — interface redesign
+
+- A new interface: a sidebar groups every page (Monitor; Data & alerting; Access; System), with
+  badges for pending access requests and open alert events, the ingest status, the signed-in
+  user and a light / dark / automatic theme switch (kept in a `theme` cookie, so the first paint
+  is already right). On narrow screens the sidebar becomes a drawer.
+- New design system in `app/globals.css` and `components/ui.tsx`: one set of colour tokens for
+  both themes (`light-dark()`), cards, stat tiles, rings, donuts and inline icons. Still no
+  external fonts, scripts or images.
+- Administration pages have their own titles instead of a shared "Administration" header and tab
+  row. Admin → Mail is now **Mailboxes**, Admin → Domains **Monitored domains**, Admin → Users
+  **People** and API access **API & SCIM**; the URLs are unchanged.
+- Settings are grouped (General, Data & retention, Sign-in & access, Email delivery, Alerts &
+  automation). Alerts are split into tabs: Events, Rules, Channels and Delivery history.
+
+### Added
+
+- A **health score** (0–100, graded A–F) per domain and, weighted by volume, for all of them:
+  authentication rate (50), published policy (30) and DKIM coverage (20), minus 10 for each
+  failing DMARC or SPF check. Every page that shows it also shows how it was made up
+  (`lib/health.ts`).
+- **Domains** (`/domains`): a card per domain with its grade, policy, compliance, a volume trend
+  and the latest DNS check, sortable by health, volume or name.
+- **Sources** (`/sources`): every sending source across domains (or one domain), with the sender
+  mix by category; selecting a category filters the list.
+- Overview: a security-posture summary, a "Needs attention" list (weakest domains and the top
+  failing sources) and the daily compliance rate drawn over the volume chart.
+- Issues: totals per diagnosis (unauthorized, needs a fix, benign) and a filter by kind.
+- Domain page: health breakdown, an alignment donut and a card per DNS record.
+
 ## 2.0.0 (2026-11-19)
 
 2.0 moves configuration into the browser: after deploying with `DATABASE_URL`, `APP_URL` and

@@ -75,8 +75,8 @@ anyone else can reach it.)
    account — see [docs/deployment.md](docs/deployment.md) (Docker Compose, Kubernetes, Google
    Cloud Run, Vercel) and the deployment guide's upgrade notes when coming from 1.1.
 4. **Choose how people sign in** — see [docs/authentication.md](docs/authentication.md).
-5. **Configure** the mailbox and monitored domains under Admin → Mail and Admin → Domains
-   ([docs/mail.md](docs/mail.md)), and retention and the rest under Admin → Settings or in the
+5. **Configure** the mailbox and monitored domains under **Mailboxes** and **Monitored domains** in the sidebar
+   ([docs/mail.md](docs/mail.md)), and retention and the rest under **Settings** or in the
    environment ([docs/configuration.md](docs/configuration.md)).
 
 Reports usually start arriving 24–48 hours after the DNS record goes live, and domains appear

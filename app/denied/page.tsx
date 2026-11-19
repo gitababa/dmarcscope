@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { signOutAction } from '@/app/actions'
 import { SubmitButton } from '@/components/client'
-import { Logo } from '@/components/ui'
+import { BrandMark } from '@/components/ui'
 import { authProvider, hasSignInPage } from '@/lib/auth'
 import { getAuth } from '@/lib/auth/server'
 
@@ -19,7 +19,7 @@ export default async function DeniedPage() {
   return (
     <main className="auth-wrap">
       <div className="card auth-card">
-        <Logo size={40} />
+        <BrandMark size={24} />
         {auth.status === 'forbidden' ? (
           <>
             <h1>Access not granted</h1>

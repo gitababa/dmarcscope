@@ -1,5 +1,5 @@
 import { SubmitButton } from '@/components/client'
-import { Pill } from '@/components/ui'
+import { Pill, Notice } from '@/components/ui'
 import { relTime } from '@/lib/format'
 import { KINDS, type MailboxKind, type MailboxRow } from '@/lib/mail'
 import { createMailboxAction, updateMailboxAction } from '../mail-actions'
@@ -95,9 +95,7 @@ export function MailboxForm({ kind, mailbox }: { kind: MailboxKind; mailbox?: Ma
     <form action={editing ? updateMailboxAction : createMailboxAction} className="form">
       {editing && <input type="hidden" name="id" value={mailbox.id} />}
       <input type="hidden" name="kind" value={kind} />
-      <div className="notice" role="note">
-        <span>{SETUP_NOTE[kind]}</span>
-      </div>
+      <Notice tone="info" role="note">{SETUP_NOTE[kind]}</Notice>
       <Field id="name" label="Name" value={mailbox?.name ?? (kind === 'imap' ? 'DMARC reports' : `DMARC reports (${KINDS[kind].label.split(' (')[0]})`)} required maxLength={100} />
       {kind === 'imap' ? (
         <>
@@ -213,13 +211,9 @@ export function WorkerNotice({ alive, lastSeen }: { alive: number; lastSeen: str
     )
   }
   return (
-    <div className="notice warn" role="note">
-      <span>
-        No worker is running{lastSeen ? ` (last seen ${relTime(lastSeen)})` : ''}. Mailboxes saved here are read by{' '}
+    <Notice tone="warn" role="note">No worker is running{lastSeen ? ` (last seen ${relTime(lastSeen)})` : ''}. Mailboxes saved here are read by{' '}
         <code>python -m ingestor serve</code>, with the same <code>DATABASE_URL</code> and <code>APP_SECRET</code> as this
-        app (see docs/mail.md). Until one runs, nothing is checked and tests wait.
-      </span>
-    </div>
+        app (see docs/mail.md). Until one runs, nothing is checked and tests wait.</Notice>
   )
 }
 

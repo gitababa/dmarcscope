@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
+import { Card, Notice, PageHeader } from '@/components/ui'
 import { SubmitButton } from '@/components/client'
-import { listPendingRequests } from '@/lib/admin'
 import { requirePageRole } from '@/lib/auth/server'
 import { getPool } from '@/lib/db'
 import { domainsFromEnvironment, listDomains } from '@/lib/mail'
 import { MAIL_ERRORS, MAIL_FIELDS } from '../mail/form'
 import { addDomainAction, removeDomainAction } from '../mail-actions'
-import { AdminNav } from '../nav'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Domains' }
@@ -19,32 +18,24 @@ const DONE: Record<string, string> = {
 export default async function AdminDomainsPage({ searchParams }: { searchParams: Promise<{ error?: string; field?: string; done?: string }> }) {
   const access = await requirePageRole('admin')
   const { error, field, done } = await searchParams
-  const [pending, domains] = await Promise.all([listPendingRequests(access), listDomains(getPool())])
+  const domains = await listDomains(getPool())
   const fromEnv = domainsFromEnvironment()
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Administration</h1>
-          <p>
-            The domains you monitor. Reports about any other domain are ignored: anyone can email a report to your mailbox,
-            so this list decides what gets stored and shown.
-          </p>
-        </div>
-      </div>
-      <AdminNav current="/admin/domains" pending={pending.length} />
+      <PageHeader title="Monitored domains" lead={<>The domains you monitor. Reports about any other domain are ignored: anyone can email a report to your mailbox,
+            so this list decides what gets stored and shown.</>} />
 
       {error && (
-        <div className="notice bad" role="alert">
+        <Notice tone="bad" role="alert">
           {MAIL_ERRORS[error] ?? 'That could not be done.'}
           {error === 'invalid' && field && MAIL_FIELDS[field] ? ` Check: ${MAIL_FIELDS[field]}.` : ''}
-        </div>
+        </Notice>
       )}
       {done && !error && DONE[done] && (
-        <div className="notice ok" role="status">
+        <Notice tone="ok" role="status">
           {DONE[done]}
-        </div>
+        </Notice>
       )}
 
       {fromEnv ? (
