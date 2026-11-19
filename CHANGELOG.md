@@ -6,11 +6,11 @@ share one version number (`package.json` and `ingestor/__init__.py`).
 Upgrading: deploy the new images, then run the migration command
 (`node scripts/migrate.mjs`) before the new web version starts.
 
-## 2.0.0 (unreleased)
+## 2.0.0 (2026-11-19)
 
 2.0 moves configuration into the browser: after deploying with `DATABASE_URL`, `APP_URL` and
-`APP_SECRET`, an administrator sets up everything else in the app. It is being built in
-milestones (`docs/plan-2.0.md`); this section grows with each one.
+`APP_SECRET`, an administrator sets up everything else in the app. The design and the decisions
+behind it are in `docs/plan-2.0.md`; the sections below list what each part added.
 
 **Upgrading from 1.1.x:** run the migrations and deploy; nothing in the environment has to
 change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in

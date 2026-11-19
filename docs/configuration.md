@@ -3,7 +3,7 @@
 Three environment variables are enough to start: `DATABASE_URL`, `APP_URL` and
 `APP_SECRET`. With only those, the app serves its setup wizard (see
 [authentication.md](authentication.md#first-run-the-setup-wizard)), and everything else can be
-configured in the browser as it becomes available in 2.0. Every 1.1.0 variable keeps working
+configured in the browser (new in 2.0). Every 1.1.0 variable keeps working
 exactly as before.
 
 ## How a setting gets its value
