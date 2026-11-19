@@ -113,19 +113,34 @@ def test_reads_a_panel_mailbox_without_any_mailbox_environment_variable(db_setti
         w2.close()
 
 
-def test_refuses_to_ingest_while_no_domain_is_monitored(db_settings, imap, monkeypatch):
+def test_with_no_monitored_domain_it_only_records_domains_and_holds_reports(db_settings, imap, monkeypatch):
     monkeypatch.delenv("ALLOWED_DOMAINS", raising=False)
-    imap.messages = {1: report_for("example.com", "r1")}
+    imap.messages = {1: report_for("mail.example.com", "r1"), 2: report_for("example.com", "r2")}
     mid = add_mailbox(db_settings, port=imap.port)
     w = worker(db_settings)
     try:
         w.tick()
     finally:
         w.close()
-    [(failed, finished, _, parsed, errors)] = runs(db_settings, mid)
-    assert failed and finished and parsed == 0
-    assert "no monitored domains" in errors[0]["error"]
-    assert reports(db_settings) == [] and imap.seen == set()
+    [(failed, finished, _, parsed, _)] = runs(db_settings, mid)
+    assert not failed and finished and parsed == 0
+    assert reports(db_settings) == [] and imap.seen == {1, 2}
+    with db(db_settings) as c:
+        found = c.execute("SELECT name, base_domain, reports_seen FROM discovered_domains ORDER BY name").fetchall()
+        held = c.execute("SELECT domain FROM held_reports ORDER BY domain").fetchall()
+    assert found == [("example.com", "example.com", 1), ("mail.example.com", "example.com", 1)]
+    assert held == [("example.com",), ("mail.example.com",)]
+
+    # Monitoring one of them imports its held report; the other stays held.
+    add_domains(db_settings, "mail.example.com")
+    w = worker(db_settings)
+    try:
+        assert w.tick() is True
+    finally:
+        w.close()
+    assert reports(db_settings) == ["mail.example.com"]
+    with db(db_settings) as c:
+        assert c.execute("SELECT domain FROM held_reports").fetchall() == [("example.com",)]
 
 
 def test_a_wrong_password_is_a_failed_run_and_a_failed_test_without_the_password(db_settings, imap, caplog):

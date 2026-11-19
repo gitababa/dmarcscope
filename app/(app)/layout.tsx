@@ -59,7 +59,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         label: 'Data & alerting',
         items: [
           { href: '/admin/mail', label: 'Mailboxes', icon: 'inbox', match: ['/admin/mail'] },
-          { href: '/admin/domains', label: 'Monitored domains', icon: 'list' },
+          { href: '/admin/domains', label: 'Domains', icon: 'list' },
           { href: '/admin/alerts', label: 'Alerts', icon: 'bell', badge: openAlerts, badgeTone: 'bad' },
         ],
       },

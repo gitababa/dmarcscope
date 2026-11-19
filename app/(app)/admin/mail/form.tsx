@@ -1,7 +1,8 @@
 import { SubmitButton } from '@/components/client'
 import { Pill, Notice } from '@/components/ui'
 import { relTime } from '@/lib/format'
-import { KINDS, type MailboxKind, type MailboxRow } from '@/lib/mail'
+import { startsWorkItself } from '@/lib/ingest-trigger'
+import { KINDS, type MailboxKind, type MailboxRow, type PassStatus } from '@/lib/mail'
 import { createMailboxAction, updateMailboxAction } from '../mail-actions'
 
 export const MAIL_ERRORS: Record<string, string> = {
@@ -202,7 +203,30 @@ export function MailboxForm({ kind, mailbox }: { kind: MailboxKind; mailbox?: Ma
   )
 }
 
-export function WorkerNotice({ alive, lastSeen }: { alive: number; lastSeen: string | null }) {
+// "15 minutes", "6 hours", "1 day".
+export function everyLabel(minutes: number): string {
+  if (minutes < 90) return `${Math.max(1, Math.round(minutes))} minutes`
+  if (minutes < 36 * 60) return `${Math.round(minutes / 60)} hours`
+  const days = Math.round(minutes / 1440)
+  return days === 1 ? '1 day' : `${days} days`
+}
+
+// When the next automatic run of a mailbox can happen, in words.
+export function nextRunLabel(m: Pick<MailboxRow, 'enabled' | 'next_run_at'>, untilTime: (iso: string) => string): string {
+  if (!m.enabled || !m.next_run_at) return ''
+  if (new Date(m.next_run_at).getTime() > Date.now()) return untilTime(m.next_run_at)
+  return startsWorkItself() ? 'at the next scheduled call' : 'when a worker is free'
+}
+
+// A mailbox asking to be read more often than the deployment's scheduler
+// actually calls (Vercel Hobby: once a day) is read at the scheduler's pace.
+export function scheduleWarning(m: Pick<MailboxRow, 'enabled' | 'interval_minutes'>, passes: PassStatus | null): string | null {
+  if (!m.enabled || !passes?.typicalGapMinutes || !startsWorkItself()) return null
+  if (passes.typicalGapMinutes <= m.interval_minutes * 1.5) return null
+  return `Automatic runs happen about every ${everyLabel(passes.typicalGapMinutes)} on this deployment, so this mailbox is read at that pace. Run now reads it at any time.`
+}
+
+export function WorkerNotice({ alive, lastSeen, passes }: { alive: number; lastSeen: string | null; passes?: PassStatus | null }) {
   if (alive > 0) {
     return (
       <p className="small" style={{ margin: 0 }}>
@@ -210,22 +234,31 @@ export function WorkerNotice({ alive, lastSeen }: { alive: number; lastSeen: str
       </p>
     )
   }
-  // Vercel cannot run the long-lived worker: its daily cron reads the
-  // mailbox in IMAP_* instead (docs/deployment.md#vercel).
-  if (process.env.VERCEL === '1') {
+  // Vercel cannot run the long-lived worker: each call of the ingest
+  // function is one bounded pass (ingestor/oneshot.py), started by the
+  // schedule in vercel.json or by this app (docs/deployment.md#vercel).
+  if (startsWorkItself()) {
     return (
       <Notice tone="info" role="note">
-        <strong>On Vercel, mailboxes saved here are not read.</strong> Vercel cannot run the long-lived worker they need. Instead,
-        the daily ingest cron reads the mailbox you put in the project&apos;s environment variables: <code>IMAP_HOST</code>,{' '}
-        <code>IMAP_USER</code> and <code>IMAP_PASSWORD</code> (then redeploy).{' '}
-        {process.env.IMAP_HOST ? (
+        <strong>Runs on demand and on a schedule.</strong> Test connection and Run now start straight away. Automatic runs happen
+        each time the ingest schedule calls this app
+        {passes?.lastAt ? (
           <>
-            This deployment has one set: <code>{process.env.IMAP_USER || '?'}</code> on <code>{process.env.IMAP_HOST}</code>.
+            : the last one {relTime(passes.lastAt)}
+            {passes.typicalGapMinutes ? `, about every ${everyLabel(passes.typicalGapMinutes)}` : ''}.
           </>
         ) : (
-          <>None is set yet.</>
+          <>; none has happened yet.</>
         )}{' '}
-        The domains you list under Monitored domains still decide which reports are kept. See docs/deployment.md, section Vercel.
+        The schedule this project ships with runs once a day, the most a Vercel Hobby plan allows. On Pro it can run as often as every
+        minute; see docs/deployment.md, section Vercel.
+        {process.env.IMAP_HOST ? (
+          <>
+            {' '}
+            The mailbox in the environment (<code>{process.env.IMAP_USER || '?'}</code> on <code>{process.env.IMAP_HOST}</code>) is read on
+            the same schedule.
+          </>
+        ) : null}
       </Notice>
     )
   }

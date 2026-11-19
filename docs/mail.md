@@ -3,7 +3,7 @@
 DMARC reports arrive by email. The ingest worker reads them from one or more mailboxes,
 keeps the reports about the domains you monitor and ignores the rest. Since 2.0 both the
 mailboxes and the domain list can be set up in the browser, under **Mailboxes** and
-**Monitored domains**, with no mailbox variables in the environment. The 1.1.0 way, a single
+**Domains**, with no mailbox variables in the environment. The 1.1.0 way, a single
 mailbox from `IMAP_*` variables read by `python -m ingestor run`, keeps working unchanged
 (see [configuration.md](configuration.md#ingest-worker)).
 
@@ -23,6 +23,12 @@ mailbox from `IMAP_*` variables read by `python -m ingestor run`, keeps working 
 - **Test connection** and **Run now** are requests to the worker. The page shows "waiting for
   the worker" and updates itself when the worker has answered. If no worker is running, the
   page says so and the requests wait.
+- **On Vercel** there is no long-running worker: the web app calls the ingest function for each
+  request, so a test answers within seconds and a run starts at once, and the schedule in
+  `vercel.json` reads the mailboxes that are due. If the call is refused (for example by Vercel's
+  Deployment Protection), the request says why. See
+  [deployment.md](deployment.md#how-often-mailboxes-are-read) for how often each Vercel plan
+  allows scheduled reads.
 
 ## Running the worker
 
@@ -50,16 +56,23 @@ minutes.
 
 ## Monitored domains
 
-Anyone can email a report about any domain to your mailbox, so DMARCscope only keeps reports
-about the domains you list under **Monitored domains**. Reports about other domains are marked
-read and ignored.
+Anyone can email a report about any domain to your mailbox, so DMARCscope only stores reports
+about the domains you monitor. The **Domains** page lists every domain the reports were about,
+grouped under its registrable domain, with a **Monitor** button.
 
-- **A mailbox set up in the panel reads nothing until at least one domain is listed.** Each
-  run fails with a message saying so, rather than accepting reports about any domain.
+- **Reports about domains nobody monitors are held for 14 days**, then deleted. Monitoring a
+  domain imports its held reports. What is held is bounded (at most 100 reports per domain,
+  1,000 in all, 256 KB each; at most 1,000 domains listed), so strangers' reports cannot fill
+  the database.
+- **A mailbox set up in the panel can be read before any domain is monitored.** It then stores
+  nothing: it lists the domains it finds and holds their reports, so you can connect the
+  mailbox first and choose domains afterwards.
 - If `ALLOWED_DOMAINS` is set (on the worker, and on the web app to show it), it wins: the
   panel shows that list read-only, and the list saved in the panel is ignored. To move to the
   panel, add the same domains there first, then remove `ALLOWED_DOMAINS` from both.
-- A domain's subdomains are separate domains: add each one whose reports you want.
+- A domain's subdomains are separate domains: monitor each one whose reports you want. A
+  subdomain has reports of its own only if it publishes its own DMARC record; mail from other
+  subdomains is reported under the parent domain.
 - `python -m ingestor run` also uses the panel's list when `ALLOWED_DOMAINS` is not set.
 
 ## Retention
@@ -181,7 +194,8 @@ anyone can send, so they are shortened, shown on one line and displayed as plain
 
 | You see | Meaning |
 |---|---|
-| `no monitored domains are configured` | Add a domain under Monitored domains. |
+| `Could not start the test: the deployment refused the request (HTTP 401) …` | Vercel only. Deployment Protection covers the address the app called: add a Protection Bypass for Automation secret ([deployment.md](deployment.md#how-often-mailboxes-are-read)). |
+| `Could not start …: the ingest function did not accept the request …` | Vercel only. The web app and the function have different `APP_SECRET`s: set it for all environments, then redeploy. |
 | `the saved secret cannot be decrypted (unknown_key)` | The worker's `APP_SECRET` differs from the web app's, or `APP_SECRET` was rotated without `APP_SECRET_PREVIOUS`. Fix the variable, or save the secret again. |
 | `[AUTHENTICATIONFAILED] Invalid credentials` (or similar) | Wrong user name or password. |
 | `invalid_client: …`, `unauthorized_client: …`, `invalid_grant: …` | The provider refused the app's credentials or the delegation. The text after the colon is the provider's own explanation. |

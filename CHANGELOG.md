@@ -8,6 +8,21 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Added — mailboxes on Vercel, and domains found in reports
+
+- **Mailboxes set up in the app now work on Vercel**, on every plan. Each call of the ingest
+  function is one bounded pass that reads the mailboxes that are due. **Test connection**
+  answers within seconds and **Run now** starts at once: the app calls the function itself,
+  signed with `APP_SECRET`. The daily cron reads panel mailboxes too. The Mailboxes page shows
+  how often scheduled calls actually happen, and docs/deployment.md explains Hobby and Pro
+  (more frequent schedules on Pro, or any outside scheduler).
+- **Domains page**: every domain the reports were about, grouped under its registrable domain,
+  with a **Monitor** button. Reports about domains nobody monitors are held for 14 days
+  (bounded in size) and imported when you monitor the domain.
+- A panel mailbox can be read before any domain is monitored: it stores nothing, lists the
+  domains it finds and holds their reports. (It used to refuse to run.)
+- Migration `0010`. Run the migration command when upgrading.
+
 ### Fixed — privacy
 
 - The run history no longer keeps the subject line of messages that are not reports

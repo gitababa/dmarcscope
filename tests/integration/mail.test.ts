@@ -54,7 +54,7 @@ describe.skipIf(!TEST_DATABASE_URL)('mail settings in the panel', () => {
   })
   beforeEach(async () => {
     delete process.env.ALLOWED_DOMAINS
-    await db.admin.query(`TRUNCATE users, mailboxes, monitored_domains, worker_jobs, ingest_runs RESTART IDENTITY CASCADE`)
+    await db.admin.query(`TRUNCATE users, mailboxes, monitored_domains, worker_jobs, ingest_runs, discovered_domains, held_reports, worker_heartbeats, ingest_passes RESTART IDENTITY CASCADE`)
     for (const [who, role] of [['admin', 'admin'], ['viewer', 'viewer']] as const) {
       const { rows } = await db.admin.query(`INSERT INTO users (email, role, role_source, status, source) VALUES ($1, $2, 'assigned', 'active', 'oidc') RETURNING id`, [`${who}@example.com`, role])
       ids[who] = Number(rows[0].id)
@@ -189,6 +189,41 @@ describe.skipIf(!TEST_DATABASE_URL)('mail settings in the panel', () => {
     await mail.deleteMailbox(pool, ADMIN(), id)
     expect((await db.admin.query(`SELECT COUNT(*)::int AS n FROM worker_jobs`)).rows[0].n).toBe(0)
     expect((await db.admin.query(`SELECT mailbox_id FROM ingest_runs`)).rows).toEqual([{ mailbox_id: null }])
+  })
+
+  it('fails a request that could not be started, but never one a worker has taken', async () => {
+    const id = await mail.createMailbox(pool, ADMIN(), imap())
+    const queued = await mail.requestJob(pool, ADMIN(), id, 'test')
+    const taken = await mail.requestJob(pool, ADMIN(), id, 'run')
+    await db.admin.query(`UPDATE worker_jobs SET status = 'running' WHERE id = $1`, [taken])
+    await mail.failQueuedJob(pool, queued, 'Could not start the test: refused.')
+    await mail.failQueuedJob(pool, taken, 'Could not start the run: refused.')
+    const jobs = await mail.listJobs(pool, id)
+    expect(jobs.map((j) => [j.kind, j.status, j.result?.message ?? null])).toEqual([
+      ['run', 'running', null],
+      ['test', 'failed', 'Could not start the test: refused.'],
+    ])
+  })
+
+  it('lists the domains found in reports, with held reports, and counts only long-running workers', async () => {
+    await mail.addDomain(pool, ADMIN(), 'example.com')
+    await db.admin.query(
+      `INSERT INTO discovered_domains (name, base_domain, reports_seen) VALUES ('example.com', 'example.com', 3), ('mail.example.com', 'example.com', 2), ('other.test', NULL, 1)`
+    )
+    await db.admin.query(`INSERT INTO held_reports (domain, org_name, report_id, report) VALUES ('mail.example.com', 'google.com', 'r1', '{}'), ('mail.example.com', 'google.com', 'r2', '{}')`)
+    const found = await mail.listFoundDomains(pool, {})
+    expect(found.map((d) => [d.name, d.base_domain, d.reports_seen, d.held, d.monitored])).toEqual([
+      ['example.com', 'example.com', 3, 0, true],
+      ['mail.example.com', 'example.com', 2, 2, false],
+      ['other.test', null, 1, 0, false],
+    ])
+    // ALLOWED_DOMAINS decides what is monitored when it is set.
+    expect((await mail.listFoundDomains(pool, { ALLOWED_DOMAINS: 'other.test' })).map((d) => d.monitored)).toEqual([false, false, true])
+
+    await db.admin.query(`INSERT INTO worker_heartbeats (worker_id, mode) VALUES ('vercel-pass', 'pass')`)
+    expect((await mail.workerStatus(pool)).alive).toBe(0)
+    await db.admin.query(`INSERT INTO worker_heartbeats (worker_id) VALUES ('serve-1')`)
+    expect((await mail.workerStatus(pool)).alive).toBe(1)
   })
 
   it('shows run history and whether a worker is alive', async () => {
