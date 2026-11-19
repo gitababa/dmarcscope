@@ -86,3 +86,38 @@ def test_a_stuck_lookup_costs_only_the_time_budget(monkeypatch, db_settings):
     # the stuck one is left untouched for the next run; its worker cannot hold the process open
     assert _names(db_settings) == {"192.0.2.1": "mail.good.test", "203.0.113.9": None}
     assert all(t.daemon for t in threading.enumerate() if t.name.startswith("rdns-"))
+
+
+class _Rec:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def test_configured_servers_are_asked_and_forward_confirmation_still_applies(monkeypatch):
+    import dns.resolver
+
+    asked: list[tuple] = []
+
+    def resolve(self, qname, rdtype):
+        asked.append((tuple(self.nameservers), dict(self.nameserver_ports), str(qname), rdtype))
+        name = str(qname).rstrip(".")
+        if rdtype == "PTR":
+            ptr = {"1.2.0.192.in-addr.arpa": "Mail.Good.Test.", "66.100.51.198.in-addr.arpa": "mail.google.com."}
+            if name not in ptr:
+                raise dns.resolver.NXDOMAIN()
+            return [_Rec(target=ptr[name])]
+        if name in FORWARD and rdtype == "A":
+            return [_Rec(address=FORWARD[name])]
+        raise dns.resolver.NoAnswer()
+
+    monkeypatch.setattr(dns.resolver.Resolver, "resolve", resolve)
+    lookup = enrich.make_lookup(("10.0.0.2:5353", "1.1.1.1"))
+    assert lookup("192.0.2.1") == ("192.0.2.1", "mail.good.test")
+    assert lookup("198.51.100.66") == ("198.51.100.66", None)  # PTR claims Google, forward does not confirm
+    assert lookup("203.0.113.9") == ("203.0.113.9", None)
+    assert asked[0][0] == ("10.0.0.2", "1.1.1.1")
+    assert asked[0][1] == {"10.0.0.2": 5353, "1.1.1.1": 53}
+
+
+def test_no_servers_means_the_system_resolver():
+    assert enrich.make_lookup(()) is enrich._lookup

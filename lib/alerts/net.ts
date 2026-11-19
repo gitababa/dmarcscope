@@ -143,3 +143,59 @@ export function post(dest: Destination, body: string, headers: Record<string, st
     req.end(body)
   })
 }
+
+export type GetResult = { status: number; contentType: string; body: string; truncated: boolean }
+
+// GETs a small text document from the destination at its pinned address, with
+// the same rules as post(): no redirects (a 3xx is returned as its status,
+// not followed), certificate always verified, bounded time and size.
+export function getText(dest: Destination, opts: { limit: number; timeoutMs: number; userAgent: string }): Promise<GetResult> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        method: 'GET',
+        host: dest.address,
+        port: dest.url.port || 443,
+        path: `${dest.url.pathname}${dest.url.search}`,
+        servername: net.isIP(dest.url.hostname.replace(/^\[|\]$/g, '')) ? undefined : dest.url.hostname,
+        headers: { Host: dest.url.host, 'User-Agent': opts.userAgent, Accept: 'text/plain' },
+        timeout: opts.timeoutMs,
+        rejectUnauthorized: true,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        let seen = 0
+        let truncated = false
+        let settled = false
+        const finish = () => {
+          if (settled) return
+          settled = true
+          resolve({
+            status: res.statusCode ?? 0,
+            contentType: String(res.headers['content-type'] ?? ''),
+            body: Buffer.concat(chunks).toString('utf8'),
+            truncated,
+          })
+        }
+        res.on('data', (chunk: Buffer) => {
+          if (truncated) return
+          seen += chunk.length
+          if (seen > opts.limit) {
+            truncated = true
+            chunks.push(chunk.subarray(0, chunk.length - (seen - opts.limit)))
+            res.destroy()
+            finish()
+            return
+          }
+          chunks.push(chunk)
+        })
+        res.on('end', finish)
+        res.on('close', finish)
+        res.on('error', finish)
+      }
+    )
+    req.on('timeout', () => req.destroy(new Error('the request timed out')))
+    req.on('error', reject)
+    req.end()
+  })
+}

@@ -96,3 +96,27 @@ def test_one_version_number():
     package = json.loads((root / "package.json").read_text())["version"]
     assert ingestor.__version__ == package
     assert f"## {package}" in (root / "CHANGELOG.md").read_text(), "CHANGELOG.md has no entry for the current version"
+
+
+def test_dns_servers_match_the_panel_rules():
+    from ingestor.config import parse_dns_servers, split_server
+
+    assert parse_dns_servers(" 1.1.1.1, 9.9.9.9:53 2620:FE::FE ") == ("1.1.1.1", "9.9.9.9", "2620:fe::fe")
+    assert parse_dns_servers("10.0.0.2:5353,[2001:db8::53]:5353") == ("10.0.0.2:5353", "[2001:db8::53]:5353")
+    for bad in ["", "dns.google", "1.1.1.1:0", "1.1.1.1:70000", "300.1.1.1", "1.1.1.1 2.2.2.2 3.3.3.3 4.4.4.4 5.5.5.5"]:
+        with pytest.raises(ValueError):
+            parse_dns_servers(bad)
+    assert split_server("10.0.0.2:5353") == ("10.0.0.2", 5353)
+    assert split_server("[2001:db8::53]:5353") == ("2001:db8::53", 5353)
+    assert split_server("2620:fe::fe") == ("2620:fe::fe", 53)
+
+
+def test_invalid_dns_servers_in_the_environment_is_a_config_error(monkeypatch):
+    from ingestor.config import ConfigError, load_settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x/y")
+    monkeypatch.setenv("DNS_SERVERS", "dns.google")
+    with pytest.raises(ConfigError, match="DNS_SERVERS"):
+        load_settings()
+    monkeypatch.setenv("DNS_SERVERS", "1.1.1.1:5353")
+    assert load_settings().dns_servers == ("1.1.1.1:5353",)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import ipaddress
 import os
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -30,6 +32,59 @@ def _int(name: str, default: int, minimum: int = 0) -> int:
     return val
 
 
+MAX_DNS_SERVERS = 4
+_BRACKETED = re.compile(r"^\[([^\]]+)\](?::(\d{1,5}))?$")
+_V4_PORT = re.compile(r"^([^:]+)(?::(\d{1,5}))?$")
+
+
+def parse_dns_servers(raw: str) -> tuple[str, ...]:
+    """The dns.servers setting (DNS_SERVERS): 1 to 4 resolver IP addresses,
+    each optionally with a port, separated by commas or spaces. Same rules
+    and normal form as lib/dns-resolver.ts. Raises ValueError."""
+    parts = [p for p in re.split(r"[\s,]+", raw.strip()) if p]
+    if not parts or len(parts) > MAX_DNS_SERVERS:
+        raise ValueError(f"must be 1 to {MAX_DNS_SERVERS} IP addresses, optionally with a port")
+    out: list[str] = []
+    for p in parts:
+        host, port = p, None
+        m = _BRACKETED.match(p)
+        try:
+            if m:
+                host, port = m.group(1), m.group(2)
+                addr = ipaddress.IPv6Address(host)
+            elif ":" in p and p.count(":") > 1:
+                addr = ipaddress.IPv6Address(p)
+            else:
+                m4 = _V4_PORT.match(p)
+                if not m4:
+                    raise ValueError
+                host, port = m4.group(1), m4.group(2)
+                addr = ipaddress.IPv4Address(host)
+        except ValueError:
+            raise ValueError(f"{p!r} is not an IP address with an optional port") from None
+        if port is not None and not 1 <= int(port) <= 65535:
+            raise ValueError(f"{p!r} has an invalid port")
+        text = str(addr)
+        if port is None or int(port) == 53:
+            norm = text
+        else:
+            norm = f"[{text}]:{int(port)}" if addr.version == 6 else f"{text}:{int(port)}"
+        if norm not in out:
+            out.append(norm)
+    return tuple(out)
+
+
+def split_server(server: str) -> tuple[str, int]:
+    """A normalized server ("1.1.1.1", "1.1.1.1:5353", "[::1]:5353") as (ip, port)."""
+    m = _BRACKETED.match(server)
+    if m:
+        return m.group(1), int(m.group(2) or 53)
+    if server.count(":") > 1:
+        return server, 53
+    host, _, port = server.partition(":")
+    return host, int(port or 53)
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -54,6 +109,9 @@ class Settings:
     max_messages: int = 2000
     mail_budget_seconds: int = 600
     enrich_budget_seconds: int = 60
+    # Resolvers for reverse DNS (empty = the system's), as parse_dns_servers
+    # returns them.
+    dns_servers: tuple[str, ...] = ()
 
     # OAuth mailboxes (milestone 4): returns the SASL XOAUTH2 initial response
     # with a fresh token. When set, it is used instead of the password.
@@ -106,6 +164,14 @@ def load_settings() -> Settings:
     # IMAP_POISON_FOLDER is the pre-1.0 name of IMAP_INVALID_FOLDER.
     invalid_folder = _str("IMAP_INVALID_FOLDER") or _str("IMAP_POISON_FOLDER") or "DMARC-Invalid"
 
+    raw_dns = _str("DNS_SERVERS")
+    dns_servers: tuple[str, ...] = ()
+    if raw_dns:
+        try:
+            dns_servers = parse_dns_servers(raw_dns)
+        except ValueError as e:
+            raise ConfigError(f"DNS_SERVERS {e}") from None
+
     return Settings(
         database_url=database_url,
         allowed_domains=allowed or None,
@@ -123,4 +189,5 @@ def load_settings() -> Settings:
         max_messages=_int("INGEST_MAX_MESSAGES", 2000, 1),
         mail_budget_seconds=_int("INGEST_TIME_BUDGET_SECONDS", 600, 5),
         enrich_budget_seconds=_int("INGEST_ENRICH_BUDGET_SECONDS", 60, 0),
+        dns_servers=dns_servers,
     )

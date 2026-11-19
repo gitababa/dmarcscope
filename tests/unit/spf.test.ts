@@ -3,16 +3,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const records: Record<string, { txt?: string[]; a?: string[]; aaaa?: string[]; mx?: Array<{ exchange: string; priority: number }> }> = {}
 const notFound = () => Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' })
 
-vi.mock('node:dns/promises', () => ({
-  resolveTxt: vi.fn(async (name: string) => {
+vi.mock('node:dns/promises', () => {
+  const resolveTxt = vi.fn(async (name: string) => {
     const r = records[name.toLowerCase()]?.txt
     if (!r) throw notFound()
     return r.map((t) => [t])
-  }),
-  resolve4: vi.fn(async (name: string) => records[name.toLowerCase()]?.a ?? Promise.reject(notFound())),
-  resolve6: vi.fn(async (name: string) => records[name.toLowerCase()]?.aaaa ?? Promise.reject(notFound())),
-  resolveMx: vi.fn(async (name: string) => records[name.toLowerCase()]?.mx ?? Promise.reject(notFound())),
-}))
+  })
+  const resolve4 = vi.fn(async (name: string) => records[name.toLowerCase()]?.a ?? Promise.reject(notFound()))
+  const resolve6 = vi.fn(async (name: string) => records[name.toLowerCase()]?.aaaa ?? Promise.reject(notFound()))
+  const resolveMx = vi.fn(async (name: string) => records[name.toLowerCase()]?.mx ?? Promise.reject(notFound()))
+  // The default client (lib/dns-resolver.ts) makes a Resolver per query.
+  class Resolver {
+    setServers() {}
+    cancel() {}
+    resolveTxt = resolveTxt
+    resolve4 = resolve4
+    resolve6 = resolve6
+    resolveMx = resolveMx
+  }
+  return { Resolver, resolveTxt, resolve4, resolve6, resolveMx }
+})
 
 import { expandSpf, matchIpInNetworks, type SpfResolver } from '@/lib/spf'
 

@@ -8,6 +8,8 @@
 // listing one that nothing reads would show administrators a control that
 // does nothing. Milestones 3-5 add sign-in, mailbox and alerting settings.
 
+import { parseDnsServers } from '../dns-resolver'
+
 export type SettingType = 'string' | 'int' | 'bool' | 'secret'
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -262,6 +264,18 @@ const SETTINGS: SettingDef[] = [
     parseEnv: oneOf(['all', 'none']),
   },
   {
+    key: 'dns.servers',
+    label: 'DNS servers',
+    description:
+      'The resolvers DNS checks, SPF expansion and the ingest worker\'s reverse DNS ask, for example "1.1.1.1, 8.8.8.8" (up to 4 IP addresses, optional :port). Unset: the server\'s own resolver configuration. Choose resolvers you trust; they decide what every check sees.',
+    type: 'string',
+    env: 'DNS_SERVERS',
+    default: null,
+    ownerOnly: true,
+    parse: parseDnsServers,
+    parseEnv: parseDnsServers,
+  },
+  {
     key: 'alerts.allow_private_webhooks',
     label: 'Allow alerts to private addresses',
     description:
@@ -293,6 +307,7 @@ export type SettingKey =
   | 'smtp.from'
   | 'alerts.allow_private_webhooks'
   | 'access.domain_default'
+  | 'dns.servers'
 export type SecretSettingKey = 'cron.secret' | 'smtp.password'
 export type PlainSettingKey = Exclude<SettingKey, SecretSettingKey>
 

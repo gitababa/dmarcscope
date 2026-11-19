@@ -4,6 +4,7 @@
 
 import { sql } from './db'
 import { runDnsChecks, type DnsCheckResults } from './dns-checks'
+import { configuredDnsServers, createDnsClient } from './dns-resolver'
 import { expandSpf } from './spf'
 import type { DomainScope } from './auth/access'
 import { getObservedDkimSigners } from './queries'
@@ -49,11 +50,14 @@ export async function runAndStoreDnsCheck(scope: DomainScope, domain: string, op
   const signers = (await getObservedDkimSigners(scope, domain)).filter(
     (s) => isValidDomainName(s.signing_domain) && /^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$/i.test(s.selector)
   )
+  // One client for every query of this check, asking the configured servers.
+  const servers = await configuredDnsServers()
+  const dns = createDnsClient(servers)
   const [results, spfExpanded] = await Promise.all([
-    runDnsChecks(domain, signers),
+    runDnsChecks(domain, signers, { dns, servers }),
     // SPF expansion powers source attribution on the Issues page: which
     // include chain (if any) authorizes each problem source's IP.
-    expandSpf(domain).catch((e) => {
+    expandSpf(domain, { resolver: dns }).catch((e) => {
       console.error(`[dns-check] SPF expansion failed for ${domain}:`, e)
       return undefined
     }),

@@ -23,6 +23,7 @@ const GROUPS: Array<{ title: string; icon: IconName; sub: string; prefixes: stri
   { title: 'Data & retention', icon: 'inbox', sub: 'How long reports are kept and when ingest counts as stale', prefixes: ['ingest'] },
   { title: 'Sign-in & access', icon: 'shield', sub: 'Password sign-in, single sign-on and what unscoped viewers see', prefixes: ['auth', 'access'] },
   { title: 'Email delivery', icon: 'mail', sub: 'The SMTP server alert emails are sent through', prefixes: ['smtp'] },
+  { title: 'DNS', icon: 'dns', sub: 'Which resolvers DNS checks and reverse DNS lookups ask', prefixes: ['dns'] },
   { title: 'Alerts & automation', icon: 'bell', sub: 'Webhook safety and the token for machine endpoints', prefixes: ['alerts', 'cron'] },
 ]
 

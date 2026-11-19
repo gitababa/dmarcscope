@@ -23,7 +23,7 @@ import {
 import { VolumeChart } from '@/components/VolumeChart'
 import { atLeast } from '@/lib/auth/roles'
 import { requireViewer } from '@/lib/auth/server'
-import type { CheckStatus, DnsCheckResults } from '@/lib/dns-checks'
+import type { DnsCheckResults, OptionalStatus } from '@/lib/dns-checks'
 import { isValidDomainName } from '@/lib/dns-run'
 import { fmtDate, fmtInt, parseRange, pct, policyTone, rangeLabel, rangeParam, relTime } from '@/lib/format'
 import { domainHealth } from '@/lib/health'
@@ -217,7 +217,11 @@ export default async function DomainPage({
         <Card
           title="DNS health"
           icon="dns"
-          sub={dnsCheck ? `Checked ${relTime(dnsCheck.checked_at)} against live DNS` : 'Live MX, SPF, DMARC and DKIM records'}
+          sub={
+            dnsCheck
+              ? `Checked ${relTime(dnsCheck.checked_at)} against live DNS${dnsCheck.resolver?.length ? ` via ${dnsCheck.resolver.join(', ')}` : ''}`
+              : 'Live MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT and BIMI records'
+          }
           action={
             isAdmin && (
               <form action={runDnsCheckAction}>
@@ -234,8 +238,8 @@ export default async function DomainPage({
           {dnsCheck == null ? (
             <EmptyState icon="dns" title="Not checked yet">
               {isAdmin
-                ? 'Run the checks to see its live MX, SPF, DMARC and DKIM records.'
-                : 'An administrator can run them to show its live MX, SPF, DMARC and DKIM records.'}
+                ? 'Run the checks to see its live MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT and BIMI records.'
+                : 'An administrator can run them to show its live MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT and BIMI records.'}
             </EmptyState>
           ) : (
             <>
@@ -329,7 +333,8 @@ function ALIGN_PARTS(a: { fully_aligned: number; dkim_only: number; spf_only: nu
   ]
 }
 
-function StatusPill({ status }: { status: CheckStatus }) {
+function StatusPill({ status }: { status: OptionalStatus }) {
+  if (status === 'none') return <Pill tone="muted">Not published</Pill>
   if (status === 'ok')
     return (
       <Pill tone="ok" dot>
@@ -351,12 +356,23 @@ function StatusPill({ status }: { status: CheckStatus }) {
 
 function DnsHealth({ check }: { check: DnsCheckResults }) {
   const spf = check.spf_expanded
-  const records: Array<{ name: string; label: string; status: CheckStatus; detail: React.ReactNode; notes: string[] }> = [
+  const records: Array<{ name: string; label: string; status: OptionalStatus; detail: React.ReactNode; notes: string[] }> = [
     {
       name: 'DMARC',
       label: 'Policy record',
       status: check.dmarc.status,
-      detail: check.dmarc.record ? <code className="record">{check.dmarc.record}</code> : <span className="muted">No record published</span>,
+      detail: check.dmarc.record ? (
+        <code className="record">{check.dmarc.record}</code>
+      ) : check.dmarc.inherited ? (
+        <>
+          <code className="record">{check.dmarc.inherited.record}</code>
+          <div className="muted small" style={{ marginTop: '0.35rem' }}>
+            Inherited from _dmarc.{check.dmarc.inherited.from}
+          </div>
+        </>
+      ) : (
+        <span className="muted">No record published</span>
+      ),
       notes: check.dmarc.notes,
     },
     {
@@ -395,10 +411,10 @@ function DnsHealth({ check }: { check: DnsCheckResults }) {
             .map((s) => (
               <Pill
                 key={`${s.selector}@${s.signing_domain || ''}`}
-                tone={s.found ? 'ok' : 'bad'}
-                title={s.observed ? 'Selector seen in DMARC reports' : 'Common default selector'}
+                tone={s.found ? 'ok' : s.lookup_failed ? 'warn' : 'bad'}
+                title={`${s.observed ? 'Selector seen in DMARC reports' : 'Common default selector'}${s.lookup_failed ? ' · lookup failed' : ''}`}
               >
-                {s.found ? '✓' : '✗'} {s.selector}
+                {s.found ? '✓' : s.lookup_failed ? '?' : '✗'} {s.selector}
                 {s.signing_domain ? `@${s.signing_domain}` : ''}
               </Pill>
             ))}
@@ -426,14 +442,51 @@ function DnsHealth({ check }: { check: DnsCheckResults }) {
       notes: check.mx.notes,
     },
   ]
+  const recordOrNone = (record: string | null) =>
+    record ? <code className="record">{record}</code> : <span className="muted">No record published</span>
+  if (check.mta_sts) {
+    const policy = check.mta_sts.policy
+    records.push({
+      name: 'MTA-STS',
+      label: 'Encrypted inbound delivery',
+      status: check.mta_sts.status,
+      detail: (
+        <>
+          {recordOrNone(check.mta_sts.record)}
+          {policy && (
+            <div className="mono small" style={{ display: 'grid', gap: '0.15rem', marginTop: '0.4rem' }}>
+              <span>
+                <span className="muted">mode</span> {policy.mode ?? '—'} <span className="muted">· max_age</span> {policy.max_age ?? '—'}
+              </span>
+              {policy.mx.length > 0 && (
+                <span>
+                  <span className="muted">mx</span> {policy.mx.join(', ')}
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      ),
+      notes: check.mta_sts.notes,
+    })
+  }
+  if (check.tls_rpt) {
+    records.push({ name: 'TLS-RPT', label: 'TLS failure reports', status: check.tls_rpt.status, detail: recordOrNone(check.tls_rpt.record), notes: check.tls_rpt.notes })
+  }
+  if (check.bimi) {
+    records.push({ name: 'BIMI', label: 'Brand logo', status: check.bimi.status, detail: recordOrNone(check.bimi.record), notes: check.bimi.notes })
+  }
 
   return (
     <div className="dns-grid">
       {records.map((r) => (
         <div className="dns-card" key={r.name}>
           <div className="dns-card-head">
-            <span className={`row-icon ${r.status === 'ok' ? 'ok' : r.status === 'fail' ? 'bad' : 'warn'}`} style={{ width: 28, height: 28 }}>
-              <Icon name={r.status === 'ok' ? 'check' : r.status === 'fail' ? 'x' : 'alert'} size={14} />
+            <span
+              className={`row-icon ${r.status === 'ok' ? 'ok' : r.status === 'fail' ? 'bad' : r.status === 'none' ? '' : 'warn'}`}
+              style={{ width: 28, height: 28 }}
+            >
+              <Icon name={r.status === 'ok' ? 'check' : r.status === 'fail' ? 'x' : r.status === 'none' ? 'info' : 'alert'} size={14} />
             </span>
             <div>
               <h3>{r.name}</h3>
