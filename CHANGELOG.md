@@ -8,6 +8,14 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Added — Deploy with Vercel
+
+- A **Deploy with Vercel** button in the README: it copies the repository into the deployer's
+  own GitHub account, creates a Neon database, asks for `APP_SECRET` and `CRON_SECRET`, and
+  deploys; the first build creates the tables.
+- On Vercel, `APP_URL` is optional: without it the app uses the project's production address
+  (`VERCEL_PROJECT_PRODUCTION_URL`, set by Vercel). `APP_URL` still wins when set.
+
 ### Changed — Vercel applies migrations itself
 
 - Production builds on Vercel now apply pending migrations before the new version goes live
@@ -114,13 +122,13 @@ Upgrading: deploy the new images, then run the migration command
 
 2.0 moves configuration into the browser: after deploying with `DATABASE_URL`, `APP_URL` and
 `APP_SECRET`, an administrator sets up everything else in the app. The design and the decisions
-behind it are in `docs/plan-2.0.md`; the sections below list what each part added.
+behind it are in the `docs/` guides; the sections below list what each part added.
 
 **Upgrading from 1.1.x:** run the migrations and deploy; nothing in the environment has to
 change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
 [docs/deployment.md](docs/deployment.md).
 
-### Added — milestone 1, foundation
+### Added — foundation
 
 - Sign-in managed in the app when `AUTH_PROVIDER` is unset. With no owner yet the app serves only
   a setup wizard (`/setup`), unlocked by a one-time token printed to the log (or `SETUP_TOKEN`).
@@ -147,7 +155,7 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
 - `APP_SECRET`, `APP_SECRET_PREVIOUS`, `SETUP_TOKEN`, `SETTINGS_CACHE_SECONDS`,
   `CLIENT_IP_HEADER`.
 
-### Added — milestone 2, people
+### Added — people
 
 - **Admin → Users**: pending requests (approve with a role, or reject), search and filters,
   invitations, and per person: change role, disable and enable, sign out everywhere, remove.
@@ -159,7 +167,7 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
   Every change and every refusal is audited.
 - Migration `0004` (invitations, audit log indexes).
 
-### Added — milestone 3, single sign-on in the panel
+### Added — single sign-on in the panel
 
 - **Admin → Sign-in** (owner): an OpenID Connect connection from a preset (Google, Microsoft
   Entra ID, Okta, or any other provider). A draft is tested with a real sign-in in a new
@@ -170,7 +178,7 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
   sign-on (`AUTH_ENFORCE_SSO`). The owner's password sign-in is never affected.
 - Migration `0005` (`sso_connections`).
 
-### Added — milestone 4, mail and domains
+### Added — mail and domains
 
 - **Admin → Mail**: reports mailboxes set up in the browser: IMAP with a password, Microsoft 365
   (an app registration with `IMAP.AccessAsApp`, client credentials) and Google Workspace (a
@@ -188,7 +196,7 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
 - Migration `0006` (`mailboxes`, `monitored_domains`, `worker_jobs`, `worker_heartbeats`;
   `ingest_runs.mailbox_id` and `trigger`).
 
-### Added — milestone 5, alerting
+### Added — alerting
 
 - **Admin → Alerts:** rules for a new source failing DMARC above a volume threshold, compliance
   for a domain dropping below a threshold, ingest going stale, and a published DMARC or SPF record
@@ -207,10 +215,10 @@ change, and a 1.1.x deployment behaves as before. See "From 1.1.x to 2.0" in
   delivery, and connect to the address they validated.
 - DNS checks now record `lookup_failed` for a DMARC or SPF lookup that timed out, so a timeout is
   never mistaken for a record that was removed.
-- Upgrading from the previous 2.0 milestone: run the migrations (`0007`). With no rules nothing
+- Upgrading: run the migrations (`0007`). With no rules nothing
   changes and nothing is sent.
 
-### Added — milestone 6, enterprise access
+### Added — enterprise access
 
 - **Per-domain permissions:** limit a viewer, directly or through a group, to chosen domains
   (Admin → Users, Admin → Groups). Every query in `lib/queries.ts` filters by the caller's scope, a

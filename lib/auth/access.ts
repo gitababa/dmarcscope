@@ -4,7 +4,7 @@
 // API and SCIM endpoints get theirs from lib/api-tokens.ts, which calls into
 // the same resolution.
 //
-// Resolution (docs/plan-2.0.md, milestone 6):
+// Resolution (docs/enterprise.md, Domain permissions):
 //   owner, admin      → every domain, always.
 //   viewer            → their own domain_scopes row wins: 'all' → all domains,
 //                       'limited' → their grants plus the grants of the

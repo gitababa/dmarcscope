@@ -1,4 +1,4 @@
--- 2.0 milestone 5: alert rules, channels, events and the delivery outbox.
+-- 2.0: alert rules, channels, events and the delivery outbox.
 -- Everything here is read and written by the web app only (lib/alerts/).
 
 CREATE TABLE IF NOT EXISTS alert_channels (

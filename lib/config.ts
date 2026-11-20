@@ -53,6 +53,10 @@ export function appUrl(env: Env = process.env): string {
     }
     return url.origin
   }
+  // On Vercel, the project's production address (its shortest custom domain,
+  // else its .vercel.app one). Set by the platform, not taken from a request.
+  const vercelHost = env.VERCEL === '1' ? env.VERCEL_PROJECT_PRODUCTION_URL?.trim() : undefined
+  if (vercelHost && /^[a-z0-9.-]+(:\d+)?$/i.test(vercelHost)) return `https://${vercelHost.toLowerCase()}`
   if (env.NODE_ENV === 'production') {
     throw new ConfigError('APP_URL is not set. Set it to the public URL of this deployment, e.g. https://dmarc.example.com.')
   }

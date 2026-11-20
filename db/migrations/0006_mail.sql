@@ -1,4 +1,4 @@
--- 2.0 milestone 4: reports mailboxes and monitored domains configured in the
+-- 2.0: reports mailboxes and monitored domains configured in the
 -- panel, and the worker's long-running mode (python -m ingestor serve).
 --
 -- Contract between the web app (lib/mail.ts) and the worker (ingestor/):

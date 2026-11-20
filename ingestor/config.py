@@ -113,7 +113,7 @@ class Settings:
     # returns them.
     dns_servers: tuple[str, ...] = ()
 
-    # OAuth mailboxes (milestone 4): returns the SASL XOAUTH2 initial response
+    # OAuth mailboxes (Microsoft 365, Google Workspace): returns the SASL XOAUTH2 initial response
     # with a fresh token. When set, it is used instead of the password.
     imap_xoauth2: Callable[[], bytes] | None = None
 

@@ -1,4 +1,4 @@
-// The rules of milestone 6 that need no database: how a person's domain scope
+// The enterprise-access rules that need no database: how a person's domain scope
 // is resolved, token formats and validation, scope input, SCIM filters.
 
 import { describe, expect, it } from 'vitest'

@@ -1,4 +1,4 @@
--- 2.0 milestone 2: managing people in the panel.
+-- 2.0: managing people in the panel.
 
 -- An invitation is a pending users row with an assigned role and invited_at
 -- set; it becomes active on that person's first sign-in. A pending row

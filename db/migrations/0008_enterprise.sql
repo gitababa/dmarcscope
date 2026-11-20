@@ -1,4 +1,4 @@
--- 2.0 milestone 6: per-domain permissions, SCIM groups and API tokens.
+-- 2.0: per-domain permissions, SCIM groups and API tokens.
 -- Nothing here changes what anyone sees until an administrator limits
 -- someone: no row means "no opinion" and access.domain_default (default
 -- 'all') decides.

@@ -1,7 +1,7 @@
 -- 2.0 foundation: users and access in the database, settings, audit log,
 -- first-run setup. Nothing here changes how a 1.1.0 deployment behaves: with
 -- its environment unchanged, every new table starts empty and the
--- environment keeps deciding (see docs/plan-2.0.md).
+-- environment keeps deciding (see docs/configuration.md).
 
 -- Bumped in the same transaction as every write to settings, access_rules or
 -- to who the owner is. Web processes cache what they read from those tables

@@ -4,8 +4,7 @@
 export type Role = 'owner' | 'admin' | 'viewer'
 
 // 'local' is AUTH_PROVIDER unset: the application manages sign-in itself
-// (the owner's password and TOTP now; single sign-on configured in the panel
-// from milestone 3).
+// (passwords and TOTP, and single sign-on configured in the panel).
 export type AuthProviderName = 'local' | 'oidc' | 'proxy-jwt' | 'proxy-header' | 'none'
 
 // Who the request is, as established by the configured provider.

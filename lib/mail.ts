@@ -1,5 +1,5 @@
 // Reports mailboxes and monitored domains configured in the panel
-// (milestone 4). Administrators manage them; the worker (python -m ingestor
+// (2.0). Administrators manage them; the worker (python -m ingestor
 // serve) reads the mailboxes.
 //
 // Credentials are never readable through the web app: a mailbox secret is

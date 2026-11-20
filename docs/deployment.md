@@ -250,7 +250,14 @@ of newly monitored domains. Three things call it:
   [How often mailboxes are read](#how-often-mailboxes-are-read)).
 - Optionally, any other scheduler, with the machine token.
 
-1. **Import the repository** in Vercel (*Add New → Project*). The defaults are right.
+The **Deploy with Vercel** button in the README does steps 1 to 4 in one go: it copies the
+repository into your own GitHub account, creates a Neon database, asks for `APP_SECRET` and
+`CRON_SECRET`, and deploys (the first build creates the tables). Then continue at step 5. The
+steps by hand:
+
+1. **Import the repository** in Vercel (*Add New → Project*). The defaults are right. Use your
+   own copy of the repository (a private one is fine), so that your deployment and its
+   settings stay out of the public project.
 2. **Add a database.** *Storage → Create → Neon* (or any PostgreSQL), connected to the project.
    It sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED` for you.
 3. **Set the environment variables** (*Settings → Environment Variables*). Set them for
@@ -259,7 +266,7 @@ of newly monitored domains. Three things call it:
 
    | Variable | Value |
    |---|---|
-   | `APP_URL` | the production address, e.g. `https://dmarc.example.com` |
+   | `APP_URL` | optional on Vercel: without it the app uses the project's production address (your custom domain, else the `.vercel.app` one). Set it if you use another address |
    | `APP_SECRET` | `openssl rand -base64 32`. Keep a copy: secrets saved in the app (mailbox passwords) need it |
    | `CRON_SECRET` | `openssl rand -hex 32`. Vercel Cron sends it; without it the scheduled calls get 401 |
 

@@ -6,6 +6,13 @@ who is sending mail as you, whether it authenticates, and what to fix.
 
 It is read-only: it never sends, blocks or changes any mail.
 
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgitababa%2Fdmarcscope&project-name=dmarcscope&repository-name=dmarcscope&env=APP_SECRET%2CCRON_SECRET&envDescription=APP_SECRET%3A%20at%20least%2032%20random%20characters%20%28openssl%20rand%20-base64%2032%29%3B%20keep%20a%20copy%2C%20saved%20mailbox%20passwords%20need%20it.%20CRON_SECRET%3A%20at%20least%2016%20random%20characters%20%28openssl%20rand%20-hex%2032%29.&envLink=https%3A%2F%2Fgithub.com%2Fgitababa%2Fdmarcscope%2Fblob%2Fmain%2Fdocs%2Fdeployment.md%23vercel&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22neon%22%2C%22productSlug%22%3A%22neon%22%2C%22protocol%22%3A%22storage%22%7D%5D)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark.png">
+  <img src="docs/images/overview-light.png" alt="The DMARCscope overview: a security score, DMARC, DKIM and SPF alignment rates, daily mail volume and the sources that need attention">
+</picture>
+
 ## What you get
 
 - **Overview** — volume, DMARC / DKIM / SPF alignment and published policy for every domain.
@@ -19,6 +26,49 @@ It is read-only: it never sends, blocks or changes any mail.
   Cloudflare Access, or an authenticating reverse proxy. Access is deny-by-default.
 - **Nothing phones home** — no external fonts, scripts or analytics; IP lookups use an offline
   database.
+
+## Screenshots
+
+**A domain**: its health score, which mechanism carries DMARC, the published policy, daily
+volume, and advice on when to move to `quarantine` or `reject`.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/domain-dark.png">
+  <img src="docs/images/domain-light.png" alt="The page for example.com: health score, alignment breakdown, published policy and daily volume">
+</picture>
+
+**Live DNS health**: DMARC (with the parent-domain fallback for subdomains), SPF with its
+lookup count, DKIM keys, MX, MTA-STS, TLS-RPT and BIMI.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dns-dark.png">
+  <img src="docs/images/dns-light.png" alt="DNS health cards for DMARC, SPF, DKIM, MX, MTA-STS, TLS-RPT and BIMI">
+</picture>
+
+**Issues**: every source failing DMARC, ranked by volume, with a diagnosis and what to do.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/issues-dark.png">
+  <img src="docs/images/issues-light.png" alt="The Issues page: unauthorized senders with a diagnosis and a suggested fix">
+</picture>
+
+**Sources**: every server that sent mail as your domains, recognised by its reverse DNS.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/sources-dark.png">
+  <img src="docs/images/sources-light.png" alt="The Sources page: the sender mix and each sending server with its category and DMARC pass rate">
+</picture>
+
+**Domains**: every domain the reports were about; choose which to monitor. Reports for the
+others are held for 14 days.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/domains-admin-dark.png">
+  <img src="docs/images/domains-admin-light.png" alt="The Domains page: domains found in reports, with a Monitor button for those not monitored yet">
+</picture>
+
+The screenshots use generated demo data (`scripts/demo_reports.py`) for reserved example
+domains and documentation IP ranges.
 
 ## How it works
 
@@ -62,6 +112,14 @@ real use, start from a fresh `.env` as below.
 public https address) and `APP_SECRET` (`openssl rand -base64 32`). Step-by-step guides for
 Docker Compose, Kubernetes, Google Cloud Run and Vercel are in
 [docs/deployment.md](docs/deployment.md).
+
+The quickest way is the **Deploy with Vercel** button above. It copies this repository into
+*your own* GitHub account (keep that copy private if you like), creates a Neon database, asks
+for `APP_SECRET` and `CRON_SECRET`, and deploys. The first build creates the tables, and the app
+uses the project's Vercel address until you set `APP_URL` to a domain of your own. Vercel's
+free Hobby plan is enough to start; see
+[How often mailboxes are read](docs/deployment.md#how-often-mailboxes-are-read) for what each
+plan allows.
 
 **2. Create the owner account.** Open the app: it starts a setup wizard. The one-time
 **setup token** it asks for is in the app's server log (search for `[setup]`). If you can't

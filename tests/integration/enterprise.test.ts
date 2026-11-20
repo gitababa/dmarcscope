@@ -1,4 +1,4 @@
-// Milestone 6 against PostgreSQL: every query filtered by scope, scope
+// Enterprise access against PostgreSQL: every query filtered by scope, scope
 // resolution from the database, domain scope administration, API tokens, the
 // JSON API and CSV, and SCIM.
 

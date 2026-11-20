@@ -141,10 +141,13 @@ function FoundDomains({ groups, canMonitor }: { groups: Group[]; canMonitor: boo
       </div>
       <div className="card flush" role="list" aria-label="Domains found in reports">
         {groups.length === 0 && <div className="person-row muted">No reports have been read yet.</div>}
-        {groups.map((g) =>
-          g.domains.map((d) => (
+        {groups.map((g) => {
+          // Indent subdomains only under their parent when the parent is listed;
+          // otherwise they would look like part of the group above.
+          const parentListed = g.domains.some((x) => x.name === g.base)
+          return g.domains.map((d) => (
             <div className="person-row" role="listitem" key={d.name}>
-              <div className="person-who" style={d.name !== g.base ? { paddingLeft: '1.25rem' } : undefined}>
+              <div className="person-who" style={parentListed && d.name !== g.base ? { paddingLeft: '1.25rem' } : undefined}>
                 <div className="source-name">{d.name}</div>
                 <div className="source-meta">
                   {d.reports_seen} {d.reports_seen === 1 ? 'report' : 'reports'} · last {relTime(d.last_seen_at)}
@@ -170,7 +173,7 @@ function FoundDomains({ groups, canMonitor }: { groups: Group[]; canMonitor: boo
               </div>
             </div>
           ))
-        )}
+        })}
       </div>
     </section>
   )

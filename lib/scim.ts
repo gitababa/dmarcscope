@@ -1,6 +1,6 @@
 // SCIM 2.0 (RFC 7643, 7644) for users and groups, behind the SCIM token.
 //
-// What SCIM may and may not do (docs/plan-2.0.md, milestone 6):
+// What SCIM may and may not do (docs/enterprise.md, SCIM provisioning):
 //   - create viewers; never any other role, and it cannot change anyone's role;
 //   - never touch an owner (every operation on one is refused);
 //   - never change a user's userName (the e-mail address is the identity: a

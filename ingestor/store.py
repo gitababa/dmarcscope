@@ -301,7 +301,7 @@ def finish_run(conn: psycopg.Connection, run_id: int, stats: dict, failed: bool 
     conn.commit()
 
 
-# ---------- milestone 4: the panel's mailboxes, monitored domains, jobs ----------
+# ---------- the panel's mailboxes, monitored domains, jobs ----------
 
 # Advisory lock keys: (class, object) pairs, so they cannot collide with the
 # single-key locks above. Class 1: "a run of mailbox <id> is active", held for

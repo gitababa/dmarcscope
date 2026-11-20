@@ -1,5 +1,5 @@
-"""Access tokens for mailboxes that sign in with OAuth (docs/plan-2.0.md,
-milestone 4 research).
+"""Access tokens for mailboxes that sign in with OAuth (docs/mail.md,
+"Mailbox kinds").
 
 Microsoft 365: client-credentials grant, scope https://outlook.office365.com/.default,
 with the application's service principal given FullAccess to the one mailbox.

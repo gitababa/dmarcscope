@@ -1,4 +1,4 @@
-// Managing people and access rules (milestone 2). The server actions in
+// Managing people and access rules. The server actions in
 // app/(app)/admin/ call these; they hold every rule about who may do what, so
 // that the rules are tested against the database without Next.js.
 //
@@ -133,7 +133,7 @@ const userTarget = (id: number) => `user:${id}`
 // ---------- users ----------
 
 // How an invited person will sign in: through the proxy in front, or single
-// sign-on (configured in the environment now, in the panel from milestone 3).
+// sign-on (configured in the environment or in the panel).
 function inviteSource(): 'proxy' | 'oidc' {
   const p = authProvider()
   return p === 'proxy-jwt' || p === 'proxy-header' ? 'proxy' : 'oidc'
