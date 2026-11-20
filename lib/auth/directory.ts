@@ -23,7 +23,7 @@ export type UserRow = {
   status: 'pending' | 'active' | 'disabled'
   source: UserSource
   sessions_valid_after: string | null
-  // Set on an invitation (milestone 2): a pending row with an assigned role
+  // Set on an invitation: a pending row with an assigned role
   // that becomes active at the person's first sign-in.
   invited_at: string | null
 }

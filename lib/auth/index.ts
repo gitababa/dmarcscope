@@ -63,7 +63,7 @@ export async function authenticate(req: RequestLike, env: Env = process.env, dir
     // In oidc mode the cookie may also come from the owner's own sign-in.
     const claims = await unsealSessionClaims(req.cookie(sessionCookieName(env)), env)
     if (!claims) return { status: 'unauthenticated' }
-    // Without SSO configured in the panel (milestone 3), a cookie in local
+    // Without SSO configured in the panel, a cookie in local
     // mode can only come from the password sign-in, which records the user.
     if (provider === 'local' && claims.userId == null) return { status: 'unauthenticated' }
     return resolveAccess(claims.identity, provider, { issuedAt: claims.issuedAt, userId: claims.userId }, env, dir)

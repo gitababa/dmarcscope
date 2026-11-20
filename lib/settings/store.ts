@@ -20,7 +20,7 @@ import { REGISTRY, type PlainSettingKey, type SecretSettingKey, type SettingDef,
 
 export type AccessRule = { kind: 'email_domain' | 'group'; value: string; role: 'admin' | 'viewer' }
 
-// The active single sign-on connection (milestone 3), secret still encrypted.
+// The active single sign-on connection, secret still encrypted.
 export type SsoConnectionRow = {
   id: number
   preset: string

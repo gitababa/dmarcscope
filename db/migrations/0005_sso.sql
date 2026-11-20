@@ -1,4 +1,4 @@
--- 2.0 milestone 3: single sign-on configured in the panel (when AUTH_PROVIDER
+-- 2.0: single sign-on configured in the panel (when AUTH_PROVIDER
 -- is unset). One draft, which changes nothing until a real test sign-in with
 -- it succeeds and an owner activates it, and at most one active connection.
 

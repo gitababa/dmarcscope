@@ -1,4 +1,4 @@
-// Single sign-on configured in the panel (milestone 3; AUTH_PROVIDER unset).
+// Single sign-on configured in the panel (AUTH_PROVIDER unset).
 //
 // One draft and at most one active connection (sso_connections). Saving the
 // draft changes nothing about how anyone signs in. A test runs the real

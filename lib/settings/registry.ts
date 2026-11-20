@@ -6,7 +6,7 @@
 //
 // Only settings the application actually reads from the store belong here:
 // listing one that nothing reads would show administrators a control that
-// does nothing. Milestones 3-5 add sign-in, mailbox and alerting settings.
+// does nothing.
 
 import { parseDnsServers } from '../dns-resolver'
 
