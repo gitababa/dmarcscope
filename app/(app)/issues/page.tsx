@@ -23,6 +23,8 @@ const KINDS = [
 ] as const
 type Kind = (typeof KINDS)[number]['key']
 
+const sourcesLabel = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`
+
 export default async function IssuesPage({
   searchParams,
 }: {
@@ -91,10 +93,10 @@ export default async function IssuesPage({
 
       {items.length > 0 && (
         <div className="stat-grid">
-          <Stat icon="alert" label="Failing messages" value={fmtInt(totalFailing)} tone="bad" sub={`${items.length}${items.length === LIMIT ? '+' : ''} source/domain pairs`} />
-          <Stat icon="xCircle" label="Unauthorized" value={fmtInt(failingOf(by('bad')))} sub={`${by('bad').length} sources · blocked by quarantine/reject`} href={href({ kind: 'bad' })} />
-          <Stat icon="settings" label="Needs a fix" value={fmtInt(failingOf(by('warn')))} sub={`${by('warn').length} sources · set up SPF or DKIM`} href={href({ kind: 'warn' })} />
-          <Stat icon="refresh" label="Benign" value={fmtInt(failingOf(by('ok')))} sub={`${by('ok').length} sources · forwarding and lists`} href={href({ kind: 'ok' })} />
+          <Stat icon="alert" label="Failing messages" value={fmtInt(totalFailing)} tone="bad" sub={`${items.length}${items.length === LIMIT ? '+' : ''} source/domain ${items.length === 1 ? 'pair' : 'pairs'}`} />
+          <Stat icon="xCircle" label="Unauthorized" value={fmtInt(failingOf(by('bad')))} sub={`${sourcesLabel(by('bad').length)} · blocked by quarantine/reject`} href={href({ kind: 'bad' })} />
+          <Stat icon="settings" label="Needs a fix" value={fmtInt(failingOf(by('warn')))} sub={`${sourcesLabel(by('warn').length)} · set up SPF or DKIM`} href={href({ kind: 'warn' })} />
+          <Stat icon="refresh" label="Benign" value={fmtInt(failingOf(by('ok')))} sub={`${sourcesLabel(by('ok').length)} · forwarding and lists`} href={href({ kind: 'ok' })} />
         </div>
       )}
 
