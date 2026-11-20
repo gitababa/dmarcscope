@@ -116,6 +116,7 @@ node scripts/secrets-reencrypt.mjs   # npm run secrets:reencrypt: after changing
 | `INGEST_MAX_MESSAGES` | `2000` | Messages processed per run. |
 | `INGEST_TIME_BUDGET_SECONDS` | `600` | Time limit for the mailbox phase of a run. |
 | `INGEST_ENRICH_BUDGET_SECONDS` | `60` | Time limit for reverse-DNS lookups; `0` disables them. |
+| `MIGRATE_ON_BUILD` | on | Vercel only: production builds apply pending migrations before going live; `0` turns it off ([deployment.md](deployment.md#migrations-on-vercel)). |
 | `INGEST_PASS_BUDGET_SECONDS` | `240` | Vercel only: one call of the ingest function stops starting new work after this many seconds. Keep it below the function's `maxDuration` ([deployment.md](deployment.md#how-often-mailboxes-are-read)). |
 
 ### Commands

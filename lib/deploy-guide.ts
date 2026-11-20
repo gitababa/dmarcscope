@@ -29,8 +29,10 @@ export const PLATFORMS: Platform[] = [
         body: 'Settings → Environment Variables. The web app and the ingest function must share `APP_SECRET`, so set each one for Production and Preview. Keep a copy of `APP_SECRET`: saved mailbox passwords need it. Generate the two secrets with the commands shown.',
         code: 'APP_URL      https://dmarc.example.com\nAPP_SECRET   the output of: openssl rand -base64 32\nCRON_SECRET  the output of: openssl rand -hex 32',
       },
-      { title: 'Create the tables', body: 'From a checkout of the same version, with the unpooled connection string. Again after each upgrade.', code: "DATABASE_URL='postgres://…unpooled…' npm run db:migrate" },
-      { title: 'Redeploy', body: 'Deployments → ⋯ → Redeploy, so the variables take effect.' },
+      {
+        title: 'Redeploy',
+        body: 'Deployments → ⋯ → Redeploy, so the variables take effect. Each production build creates and updates the tables itself before it goes live (preview builds never touch the database). A failed migration fails the build, and the previous version keeps serving.',
+      },
       { title: 'Add the mailbox, then choose domains', body: 'Mailboxes → Add, then Test connection (answers in seconds) and Run now. Then Domains → Monitor on yours.' },
     ],
   },

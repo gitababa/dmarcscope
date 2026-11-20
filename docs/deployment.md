@@ -263,22 +263,36 @@ of newly monitored domains. Three things call it:
    | `APP_SECRET` | `openssl rand -base64 32`. Keep a copy: secrets saved in the app (mailbox passwords) need it |
    | `CRON_SECRET` | `openssl rand -hex 32`. Vercel Cron sends it; without it the scheduled calls get 401 |
 
-4. **Create the tables** once, and again after each upgrade, from a checkout of the same
-   version, with the *unpooled* connection string (*Storage → your database → .env.local*):
-
-   ```bash
-   DATABASE_URL='postgres://…unpooled…' npm run db:migrate
-   ```
-
-5. **Redeploy** (*Deployments → ⋯ → Redeploy*) so the variables take effect, then
+4. **Redeploy** (*Deployments → ⋯ → Redeploy*) so the variables take effect. Every
+   production build creates and updates the tables itself, before the new version goes live
+   (see [Migrations on Vercel](#migrations-on-vercel)). Then
    [create the owner](#first-start-create-the-owner). The token is in the project's **Logs**;
    the Hobby plan keeps an hour of them, so if it is gone, press **Write a new token to the log**
    on `/setup`.
-6. **Add the reports mailbox** under **Mailboxes** ([mail.md](mail.md)) and press **Test
+5. **Add the reports mailbox** under **Mailboxes** ([mail.md](mail.md)) and press **Test
    connection**. Then **Run now**.
-7. **Choose your domains** under **Domains**. Until you monitor one, mailboxes are read but
+6. **Choose your domains** under **Domains**. Until you monitor one, mailboxes are read but
    nothing is stored: every domain the reports are about is listed there, with its reports held
    for 14 days, and **Monitor** imports them.
+
+### Migrations on Vercel
+
+The build command (`vercel.json` → `buildCommand`, `scripts/vercel-build.mjs`) applies pending
+migrations, then builds:
+
+- **Production builds only.** A preview build may contain migrations that are not merged, so
+  it never touches the database, even when previews share the production one.
+- **Over the direct connection**: `DATABASE_URL_UNPOOLED` (which the Neon integration sets), else
+  `POSTGRES_URL_NON_POOLING`, else `DATABASE_URL`.
+- **A failed migration fails the build**, so the new version does not go live and the previous
+  deployment keeps serving. The build log shows the error.
+- **Before a database is connected** (the very first build), it skips the migrations and says
+  so; the redeploy after adding the database runs them.
+- `MIGRATE_ON_BUILD=0` turns this off; then run `npm run db:migrate` from a checkout with the
+  unpooled connection string after each upgrade.
+
+Migrations only add tables and columns, so the previous deployment keeps working against the
+new schema while the new one builds, and an instant rollback in Vercel is safe.
 
 ### How often mailboxes are read
 
@@ -352,7 +366,7 @@ Good to know:
 ## Upgrades and backups
 
 - Upgrade by deploying the new images and running the migration command. Migrations only move
-  forward.
+  forward. On Vercel, production builds run them ([Migrations on Vercel](#migrations-on-vercel)).
 - All state is in PostgreSQL. Back it up with your usual tooling. The data can also be rebuilt
   from the report emails if you keep them (`IMAP_PROCESSED_FOLDER`). Back up `APP_SECRET` too:
   without it, the secrets saved in the panel cannot be decrypted.
