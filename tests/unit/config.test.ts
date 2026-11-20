@@ -38,4 +38,13 @@ describe('config helpers', () => {
     expect(() => appUrl({ APP_URL: 'ftp://x' })).toThrow()
     expect(() => appUrl({ APP_URL: 'nonsense' })).toThrow()
   })
+
+  it('appUrl falls back to the production address Vercel sets, and APP_URL still wins', () => {
+    const vercel = { NODE_ENV: 'production', VERCEL: '1', VERCEL_PROJECT_PRODUCTION_URL: 'DMARC.Example.com' }
+    expect(appUrl(vercel)).toBe('https://dmarc.example.com')
+    expect(appUrl({ ...vercel, APP_URL: 'https://other.example.com' })).toBe('https://other.example.com')
+    // Only on Vercel, and only a host name: nothing else becomes the app's address.
+    expect(() => appUrl({ NODE_ENV: 'production', VERCEL_PROJECT_PRODUCTION_URL: 'dmarc.example.com' })).toThrow(/APP_URL/)
+    expect(() => appUrl({ ...vercel, VERCEL_PROJECT_PRODUCTION_URL: 'evil.example/x?y=' })).toThrow(/APP_URL/)
+  })
 })

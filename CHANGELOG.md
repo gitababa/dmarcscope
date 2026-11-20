@@ -8,6 +8,14 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Added — Deploy with Vercel
+
+- A **Deploy with Vercel** button in the README: it copies the repository into the deployer's
+  own GitHub account, creates a Neon database, asks for `APP_SECRET` and `CRON_SECRET`, and
+  deploys; the first build creates the tables.
+- On Vercel, `APP_URL` is optional: without it the app uses the project's production address
+  (`VERCEL_PROJECT_PRODUCTION_URL`, set by Vercel). `APP_URL` still wins when set.
+
 ### Changed — Vercel applies migrations itself
 
 - Production builds on Vercel now apply pending migrations before the new version goes live

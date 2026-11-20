@@ -23,11 +23,14 @@ export const PLATFORMS: Platform[] = [
     summary: 'The web app plus the ingest worker as a Python function. No server to run; Neon (or any PostgreSQL) for the database.',
     docs: 'Vercel',
     steps: [
-      { title: 'Import and add a database', body: 'Import the repository (Add New → Project; the defaults are right), then Storage → Create → Neon. It sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.' },
+      {
+        title: 'Import and add a database',
+        body: 'The Deploy with Vercel button in the README does this and the next step in one go. By hand: import your own copy of the repository (Add New → Project; the defaults are right), then Storage → Create → Neon. It sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.',
+      },
       {
         title: 'Environment variables, for all environments',
         body: 'Settings → Environment Variables. The web app and the ingest function must share `APP_SECRET`, so set each one for Production and Preview. Keep a copy of `APP_SECRET`: saved mailbox passwords need it. Generate the two secrets with the commands shown.',
-        code: 'APP_URL      https://dmarc.example.com\nAPP_SECRET   the output of: openssl rand -base64 32\nCRON_SECRET  the output of: openssl rand -hex 32',
+        code: 'APP_SECRET   the output of: openssl rand -base64 32\nCRON_SECRET  the output of: openssl rand -hex 32\nAPP_URL      optional: only for an address other than the project’s own',
       },
       {
         title: 'Redeploy',

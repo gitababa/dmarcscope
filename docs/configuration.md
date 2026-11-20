@@ -75,7 +75,7 @@ encrypted with `SESSION_SECRET` where that is set, otherwise with a key derived 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `APP_URL` | `http://localhost:3000` outside production; required in production | Public URL. Used for sign-in redirects, to decide whether cookies are `Secure`, and to check that form posts come from this site. |
+| `APP_URL` | `http://localhost:3000` outside production; on Vercel, the project's production address (`VERCEL_PROJECT_PRODUCTION_URL`); otherwise required in production | Public URL. Used for sign-in redirects, to decide whether cookies are `Secure`, and to check that form posts come from this site. |
 | `APP_NAME` | `DMARCscope` | Name shown in the header and page titles. Also a panel setting. |
 | `DATABASE_POOL_MAX` | `10` | Connections per web instance. |
 | `DATABASE_QUERY_TIMEOUT_MS` | `30000` | The web app abandons a query after this long and drops its connection. `0` disables. |
