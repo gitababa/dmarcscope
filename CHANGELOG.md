@@ -8,6 +8,14 @@ Upgrading: deploy the new images, then run the migration command
 
 ## Unreleased
 
+### Changed — Vercel applies migrations itself
+
+- Production builds on Vercel now apply pending migrations before the new version goes live
+  (`scripts/vercel-build.mjs`, set as `buildCommand` in `vercel.json`). Preview builds never
+  touch the database. A failed migration fails the build, and the previous deployment keeps
+  serving. `MIGRATE_ON_BUILD=0` turns it off. Before this, upgrading without running
+  `npm run db:migrate` broke the pages that use new tables.
+
 ### Added — deployment guide
 
 - **Deployment guide** in the app (sidebar, for administrators, and on the setup page; it also
